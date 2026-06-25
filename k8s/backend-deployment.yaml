@@ -1,0 +1,160 @@
+# =============================================================================
+# Backend — Deployment
+#
+# Security posture:
+#   • runAsNonRoot: true      — container cannot start as root
+#   • allowPrivilegeEscalation: false — setuid/setcap binaries have no effect
+#   • readOnlyRootFilesystem: true    — immutable container FS
+#   • capabilities.drop: ALL          — no Linux capabilities
+#   • seccompProfile: RuntimeDefault  — syscall filtering via the node profile
+#   • Pod-level seccompProfile mirrors the container-level requirement
+#
+# The image tag placeholder IMAGE_TAG is replaced by the deploy workflow.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: ecommerce
+  labels:
+    app:     backend
+    version: "1.0"
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: backend
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0   # Zero-downtime rolling update
+
+  template:
+    metadata:
+      labels:
+        app:     backend
+        version: "1.0"
+
+    spec:
+      serviceAccountName: backend
+
+      # ── Pod-level security context ───────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        runAsGroup:   1001
+        fsGroup:      1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Spread replicas across nodes to avoid a single point of failure
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+
+      containers:
+        - name:            backend
+          # Replaced by the deploy workflow: REGISTRY/ecommerce/backend:SHA
+          image:           "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/backend:IMAGE_TAG"
+          imagePullPolicy: Always
+
+          ports:
+            - name:          http
+              containerPort: 3000
+              protocol:      TCP
+
+          # ── Container-level security context ──────────────────────────────
+          securityContext:
+            runAsNonRoot:             true
+            runAsUser:                1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
+          # ── Environment — no secrets; credentials fetched at runtime ───────
+          env:
+            - name:  NODE_ENV
+              value: "production"
+            - name:  PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: backend-config
+                  key:  port
+            - name:  AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: backend-config
+                  key:  aws_region
+            - name:  LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: backend-config
+                  key:  log_level
+            - name:  ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: backend-config
+                  key:  allowed_origins
+            # Secret ARN stored in a K8s Secret created by the deploy workflow.
+            # The actual DB password is never stored in K8s — it lives in AWS
+            # Secrets Manager and is fetched at runtime by the SDK.
+            - name: DB_SECRET_ARN
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key:  db_secret_arn
+
+          # ── Resource quotas ────────────────────────────────────────────────
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "128Mi"
+            limits:
+              cpu:    "500m"
+              memory: "512Mi"
+
+          # ── Probes ─────────────────────────────────────────────────────────
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds:       5
+            failureThreshold:    12   # Allow up to 60 s for first DB connect
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 0
+            periodSeconds:       15
+            timeoutSeconds:      5
+            failureThreshold:    3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 0
+            periodSeconds:       5
+            timeoutSeconds:      3
+            failureThreshold:    3
+
+          # ── Volumes — only writable path is /tmp (required by Node.js) ─────
+          volumeMounts:
+            - name:      tmp
+              mountPath: /tmp
+
+      volumes:
+        - name:    tmp
+          emptyDir: {}

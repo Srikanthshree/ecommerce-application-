@@ -1,0 +1,56 @@
+# =============================================================================
+# Backend — ServiceAccount + ConfigMap
+#
+# The ServiceAccount annotation binds the IRSA IAM Role so pods can call
+# the AWS Secrets Manager API without any long-lived credentials.
+# Replace IRSA_ROLE_ARN and DB_SECRET_ARN with Terraform outputs before
+# applying (the deploy.yml workflow does this via sed substitution).
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backend
+  namespace: ecommerce
+  labels:
+    app: backend
+  annotations:
+    # Set to the value of `terraform output app_irsa_role_arn`
+    eks.amazonaws.com/role-arn: "IRSA_ROLE_ARN"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: ecommerce
+  labels:
+    app: backend
+data:
+  # Comma-separated list of frontend origins allowed by the CORS policy
+  allowed_origins: "https://your-domain.com"
+  log_level:       "info"
+  port:            "3000"
+  aws_region:      "us-east-1"
+
+---
+# =============================================================================
+# Backend — Service (ClusterIP)
+# Not exposed outside the cluster; the ALB Ingress routes to it.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: ecommerce
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - name:       http
+      port:       3000
+      targetPort: 3000
+      protocol:   TCP

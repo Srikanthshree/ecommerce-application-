@@ -1,0 +1,124 @@
+# =============================================================================
+# Frontend — Deployment
+#
+# nginx serves the React SPA on port 8080 as a non-root user.
+# The container FS is read-only; nginx's writable runtime paths
+# (/var/cache/nginx, /var/log/nginx, /var/run, /tmp) are mounted
+# as emptyDir volumes.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ecommerce
+  labels:
+    app:     frontend
+    version: "1.0"
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: frontend
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0
+
+  template:
+    metadata:
+      labels:
+        app:     frontend
+        version: "1.0"
+
+    spec:
+      # Frontend pods do not call any AWS API — no service account needed
+      automountServiceAccountToken: false
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        runAsGroup:   1001
+        fsGroup:      1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: frontend
+
+      containers:
+        - name:            frontend
+          image:           "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/frontend:IMAGE_TAG"
+          imagePullPolicy: Always
+
+          ports:
+            - name:          http
+              containerPort: 8080
+              protocol:      TCP
+
+          # ── Container-level security context ──────────────────────────────
+          securityContext:
+            runAsNonRoot:             true
+            runAsUser:                1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
+          # ── Resource quotas ────────────────────────────────────────────────
+          resources:
+            requests:
+              cpu:    "50m"
+              memory: "64Mi"
+            limits:
+              cpu:    "250m"
+              memory: "256Mi"
+
+          # ── Probes ─────────────────────────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds:       15
+            timeoutSeconds:      5
+            failureThreshold:    3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds:       5
+            timeoutSeconds:      3
+            failureThreshold:    3
+
+          # ── nginx writable runtime directories ─────────────────────────────
+          volumeMounts:
+            - name:      nginx-cache
+              mountPath: /var/cache/nginx
+            - name:      nginx-run
+              mountPath: /var/run
+            - name:      nginx-log
+              mountPath: /var/log/nginx
+            - name:      tmp
+              mountPath: /tmp
+
+      volumes:
+        - name:    nginx-cache
+          emptyDir: {}
+        - name:    nginx-run
+          emptyDir: {}
+        - name:    nginx-log
+          emptyDir: {}
+        - name:    tmp
+          emptyDir: {}

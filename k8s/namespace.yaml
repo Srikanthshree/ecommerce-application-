@@ -1,0 +1,19 @@
+# =============================================================================
+# Kubernetes Namespace
+#
+# Pod Security Standards label is set to "restricted" — the strictest
+# built-in policy. It enforces:
+#   - runAsNonRoot: true
+#   - allowPrivilegeEscalation: false
+#   - seccompProfile: RuntimeDefault or Localhost
+#   - No hostPath volumes, hostNetwork, hostPID, or hostIPC
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce
+  labels:
+    name: ecommerce
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit:   restricted
+    pod-security.kubernetes.io/warn:    restricted
