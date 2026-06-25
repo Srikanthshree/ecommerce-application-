@@ -111,7 +111,7 @@ jobs:
             ./backend
 
       - name: "Trivy — scan backend image"
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/backend:${{ steps.tag.outputs.TAG }}"
           format:    "sarif"
@@ -145,7 +145,7 @@ jobs:
             ./frontend
 
       - name: "Trivy — scan frontend image"
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/frontend:${{ steps.tag.outputs.TAG }}"
           format:    "sarif"
