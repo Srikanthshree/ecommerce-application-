@@ -144,7 +144,7 @@ jobs:
         run: |
           docker build \
             --no-cache \
-            --build-arg REACT_APP_API_URL="${{ vars.API_URL }}" \
+            --build-arg REACT_APP_API_URL="${{ vars.API_URL || '' }}" \
             --tag "${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}" \
             ./frontend
 
