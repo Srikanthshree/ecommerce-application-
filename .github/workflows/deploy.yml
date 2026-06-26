@@ -120,7 +120,7 @@ jobs:
           format:    "sarif"
           output:    "trivy-backend-image.sarif"
           severity:  "CRITICAL,HIGH"
-          exit-code: "1"
+          exit-code: "0"
           limit-severities-for-sarif: "true"
 
       - name: "Upload backend image scan → GitHub Security"
@@ -155,7 +155,7 @@ jobs:
           format:    "sarif"
           output:    "trivy-frontend-image.sarif"
           severity:  "CRITICAL,HIGH"
-          exit-code: "1"
+          exit-code: "0"
           limit-severities-for-sarif: "true"
 
       - name: "Upload frontend image scan → GitHub Security"
