@@ -1,0 +1,188 @@
+# =============================================================================
+# Catalog — ServiceAccount + ConfigMap + Service + Deployment
+#
+# The ServiceAccount IRSA annotation lets pods call AWS Secrets Manager
+# without any long-lived credentials.
+# Replace placeholders before applying:
+#   IRSA_ROLE_ARN  → terraform output app_irsa_role_arn
+#   DB_SECRET_ARN  → terraform output db_secret_arn
+#   IMAGE_TAG      → git SHA (set by deploy.yml pipeline)
+#   ACCOUNT_ID     → AWS account id
+#   REGION         → AWS region
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: catalog
+  namespace: ecommerce
+  labels:
+    app: catalog
+  annotations:
+    eks.amazonaws.com/role-arn: "IRSA_ROLE_ARN"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: catalog-config
+  namespace: ecommerce
+  labels:
+    app: catalog
+data:
+  port:            "8000"
+  aws_region:      "us-east-1"
+  log_level:       "info"
+  allowed_origins: "https://your-domain.com"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog
+  namespace: ecommerce
+  labels:
+    app: catalog
+spec:
+  type: ClusterIP
+  selector:
+    app: catalog
+  ports:
+    - name:       http
+      port:       8000
+      targetPort: 8000
+      protocol:   TCP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: ecommerce
+  labels:
+    app:     catalog
+    version: "1.0"
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: catalog
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0
+
+  template:
+    metadata:
+      labels:
+        app:     catalog
+        version: "1.0"
+
+    spec:
+      serviceAccountName: catalog
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        runAsGroup:   1001
+        fsGroup:      1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: catalog
+
+      containers:
+        - name:            catalog
+          image:           "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/catalog:IMAGE_TAG"
+          imagePullPolicy: Always
+
+          ports:
+            - name:          http
+              containerPort: 8000
+              protocol:      TCP
+
+          securityContext:
+            runAsNonRoot:             true
+            runAsUser:                1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
+          env:
+            - name:  PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key:  port
+            - name:  AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key:  aws_region
+            - name:  LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key:  log_level
+            - name:  ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: catalog-config
+                  key:  allowed_origins
+            - name: DB_SECRET_ARN
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets      # shared secret with backend
+                  key:  db_secret_arn
+
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "128Mi"
+            limits:
+              cpu:    "500m"
+              memory: "512Mi"
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds:       5
+            failureThreshold:    12
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds:   15
+            timeoutSeconds:  5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            periodSeconds:  5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          volumeMounts:
+            - name:      tmp
+              mountPath: /tmp
+
+      volumes:
+        - name:    tmp
+          emptyDir: {}

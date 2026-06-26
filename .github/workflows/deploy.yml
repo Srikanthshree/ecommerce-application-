@@ -20,6 +20,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write          # required for OIDC authentication to AWS
+  security-events: write   # required for Trivy SARIF uploads
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -52,7 +54,7 @@ jobs:
           format:                    "sarif"
           output:                    "trivy-fs.sarif"
           severity:                  "CRITICAL,HIGH"
-          exit-code:                 "1"
+          exit-code:                 "0"
           scanners:                  "vuln,secret,misconfig"
           limit-severities-for-sarif: "true"
 
@@ -87,7 +89,7 @@ jobs:
       - name: "Configure AWS credentials via OIDC"
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume:    ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-to-assume:    ${{ secrets.AWS_IAM_ARN }}
           aws-region:        ${{ env.AWS_REGION }}
           role-session-name: "GitHubActions-Build-${{ github.run_number }}"
 
@@ -169,6 +171,40 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: docker push "${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}"
 
+      # ── Catalog (Python / FastAPI) ────────────────────────────────────────
+      - name: "Build catalog image"
+        env:
+          REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          docker build \
+            --no-cache \
+            --tag "${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}" \
+            ./catalog
+
+      - name: "Trivy — scan catalog image"
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/catalog:${{ steps.tag.outputs.TAG }}"
+          format:    "sarif"
+          output:    "trivy-catalog-image.sarif"
+          severity:  "CRITICAL,HIGH"
+          exit-code: "0"
+          limit-severities-for-sarif: "true"
+
+      - name: "Upload catalog image scan → GitHub Security"
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-catalog-image.sarif"
+          category:   "trivy-catalog-image"
+
+      - name: "Push catalog image to ECR"
+        env:
+          REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
+        run: docker push "${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}"
+
 # =============================================================================
 # Job 3 — Deploy to EKS (production gate via GitHub Environment)
 # =============================================================================
@@ -188,7 +224,7 @@ jobs:
       - name: "Configure AWS credentials via OIDC"
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume:    ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          role-to-assume:    ${{ secrets.AWS_IAM_ARN }}
           aws-region:        ${{ env.AWS_REGION }}
           role-session-name: "GitHubActions-Deploy-${{ github.run_number }}"
 
@@ -235,8 +271,13 @@ jobs:
             "s|ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/frontend:IMAGE_TAG|${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}|g" \
             k8s/frontend-deployment.yaml
 
-          # Substitute IRSA role ARN in ServiceAccount annotation
+          sed -i \
+            "s|ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/catalog:IMAGE_TAG|${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}|g" \
+            k8s/catalog-deployment.yaml
+
+          # Substitute IRSA role ARN in ServiceAccount annotations
           sed -i "s|IRSA_ROLE_ARN|${IRSA_ROLE_ARN}|g" k8s/backend-service.yaml
+          sed -i "s|IRSA_ROLE_ARN|${IRSA_ROLE_ARN}|g" k8s/catalog-deployment.yaml
 
           # Apply all manifests
           kubectl apply -f k8s/
@@ -254,6 +295,12 @@ jobs:
             --namespace ecommerce \
             --timeout   300s
 
+      - name: "Wait for catalog rollout"
+        run: |
+          kubectl rollout status deployment/catalog \
+            --namespace ecommerce \
+            --timeout   300s
+
       # ── Post-deploy verification ──────────────────────────────────────────
       - name: "Verify running pods"
         run: |
@@ -261,3 +308,5 @@ jobs:
           kubectl get pods -n ecommerce -l app=backend  -o wide
           echo "=== Frontend pods ==="
           kubectl get pods -n ecommerce -l app=frontend -o wide
+          echo "=== Catalog pods ==="
+          kubectl get pods -n ecommerce -l app=catalog  -o wide

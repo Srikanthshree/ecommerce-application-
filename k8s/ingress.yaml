@@ -1,0 +1,60 @@
+# =============================================================================
+# ALB Ingress — routes public traffic to frontend, backend API, catalog API
+#
+# Requires the AWS Load Balancer Controller installed on EKS.
+# Install it once after cluster creation:
+#   helm repo add eks https://aws.github.io/eks-charts
+#   helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+#     -n kube-system --set clusterName=<cluster-name>
+#
+# Path routing:
+#   /api/v1/products* → catalog:8000  (Python FastAPI)
+#   /api/*            → backend:3000  (Node.js)
+#   /*                → frontend:8080 (React SPA)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ecommerce-ingress
+  namespace: ecommerce
+  labels:
+    app: ecommerce
+  annotations:
+    kubernetes.io/ingress.class:               alb
+    alb.ingress.kubernetes.io/scheme:          internet-facing
+    alb.ingress.kubernetes.io/target-type:     ip
+    alb.ingress.kubernetes.io/listen-ports:    '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    # Force all HTTP to HTTPS once you have a certificate
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT_ID
+spec:
+  rules:
+    - http:
+        paths:
+          # Catalog API — Python FastAPI
+          - path: /api/v1/products
+            pathType: Prefix
+            backend:
+              service:
+                name: catalog
+                port:
+                  number: 8000
+
+          # Backend API — Node.js
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 3000
+
+          # Frontend — React SPA (catch-all)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 8080
