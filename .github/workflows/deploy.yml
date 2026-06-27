@@ -345,6 +345,28 @@ jobs:
             --namespace ecommerce \
             --timeout   300s
 
+      - name: "Debug backend pods on failure"
+        if: failure()
+        run: |
+          echo "=== Debug: get pods ==="
+          kubectl get pods -n ecommerce -o wide || true
+
+          echo "=== Debug: describe backend deployment ==="
+          kubectl describe deployment backend -n ecommerce || true
+
+          echo "=== Debug: describe backend pods ==="
+          for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
+            kubectl describe "$p" -n ecommerce || true
+          done
+
+          echo "=== Debug: recent logs (last 200 lines) from backend pods ==="
+          for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
+            kubectl logs "$p" -n ecommerce --all-containers --tail=200 || true
+          done
+
+          echo "=== Debug: events ==="
+          kubectl get events -n ecommerce --sort-by='.metadata.creationTimestamp' || true
+
       - name: "Wait for frontend rollout"
         run: |
           kubectl rollout status deployment/frontend \
