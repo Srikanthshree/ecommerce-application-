@@ -358,6 +358,8 @@ jobs:
           for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
             kubectl describe "$p" -n ecommerce || true
           done
+          echo "=== Debug: backend secret (db_secret_arn) ==="
+          kubectl get secret backend-secrets -n ecommerce -o jsonpath='{.data.db_secret_arn}' | base64 --decode || true
 
           echo "=== Debug: recent logs (last 200 lines) from backend pods ==="
           for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
