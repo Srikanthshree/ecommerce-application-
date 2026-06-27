@@ -127,8 +127,8 @@ jobs:
           set -euo pipefail
           echo "=== backend: pwd ==="
           cd backend
-          echo "=== npm ci ===" > backend-build.log
-          npm ci --ignore-scripts >> backend-build.log 2>&1
+          echo "=== npm install ===" > backend-build.log
+          npm install --ignore-scripts >> backend-build.log 2>&1
           echo "=== npm run build ===" >> backend-build.log
           npm run build >> backend-build.log 2>&1
 
@@ -138,21 +138,6 @@ jobs:
         with:
           name: backend-build-log
           path: backend/backend-build.log
-
-      - name: "Commit backend build log to ci-logs branch"
-        if: always()
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git checkout -b ci-logs || git switch ci-logs
-          mkdir -p ci-logs
-          cp backend/backend-build.log ci-logs/backend-build-${GITHUB_RUN_ID}.log || true
-          git add ci-logs/backend-build-${GITHUB_RUN_ID}.log
-          git commit -m "ci: add backend build log for run ${GITHUB_RUN_ID}" || echo "no changes to commit"
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}" HEAD:refs/heads/ci-logs --force
 
       # ── Backend ──────────────────────────────────────────────────────────
       - name: "Build backend image"
@@ -182,8 +167,8 @@ jobs:
           limit-severities-for-sarif: "true"
 
       - name: "Upload backend image scan → GitHub Security"
+        if: success()
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: "trivy-backend-image.sarif"
           category:   "trivy-backend-image"
@@ -217,8 +202,8 @@ jobs:
           limit-severities-for-sarif: "true"
 
       - name: "Upload frontend image scan → GitHub Security"
+        if: success()
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: "trivy-frontend-image.sarif"
           category:   "trivy-frontend-image"
@@ -251,8 +236,8 @@ jobs:
           limit-severities-for-sarif: "true"
 
       - name: "Upload catalog image scan → GitHub Security"
+        if: success()
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
           sarif_file: "trivy-catalog-image.sarif"
           category:   "trivy-catalog-image"
