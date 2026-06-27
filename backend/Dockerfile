@@ -15,10 +15,9 @@ FROM node:20.15.0-alpine3.20 AS builder
 WORKDIR /build
 
 # Copy manifests first so Docker layer-cache is reused when only src changes
-COPY package.json package-lock.json tsconfig.json ./
+COPY package.json tsconfig.json ./
 
 # `--ignore-scripts` prevents malicious npm postinstall hooks from running
-# `--frozen-lockfile` ensures the exact versions in package-lock.json are used
 RUN npm install --ignore-scripts
 
 # Copy application source

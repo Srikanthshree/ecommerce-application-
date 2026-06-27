@@ -59,7 +59,7 @@ jobs:
           limit-severities-for-sarif: "true"
 
       - name: "Upload Trivy FS results → GitHub Security"
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: "trivy-fs.sarif"
@@ -168,7 +168,7 @@ jobs:
 
       - name: "Upload backend image scan → GitHub Security"
         if: success()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "trivy-backend-image.sarif"
           category:   "trivy-backend-image"
@@ -203,7 +203,7 @@ jobs:
 
       - name: "Upload frontend image scan → GitHub Security"
         if: success()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "trivy-frontend-image.sarif"
           category:   "trivy-frontend-image"
@@ -237,7 +237,7 @@ jobs:
 
       - name: "Upload catalog image scan → GitHub Security"
         if: success()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: "trivy-catalog-image.sarif"
           category:   "trivy-catalog-image"

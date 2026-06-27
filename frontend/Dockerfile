@@ -11,7 +11,7 @@ FROM node:20.15.0-alpine3.20 AS builder
 
 WORKDIR /build
 
-COPY package.json package-lock.json ./
+COPY package.json ./
 
 RUN npm install --ignore-scripts
 
