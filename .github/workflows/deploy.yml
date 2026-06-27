@@ -102,6 +102,26 @@ jobs:
         id: tag
         run: echo "TAG=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
+      - name: "Debug runner environment"
+        run: |
+          echo "=== Debug runner: $(date) ==="
+          echo "== whoami =="
+          id || whoami || true
+          echo "== pwd =="
+          pwd
+          echo "== ls repo root =="
+          ls -la
+          echo "== ls backend =="
+          ls -la backend || true
+          echo "== backend package.json =="
+          cat backend/package.json || true
+          echo "== docker version =="
+          docker --version || true
+          echo "== node version =="
+          node --version || true
+          echo "== npm version =="
+          npm --version || true
+
       # ── Backend ──────────────────────────────────────────────────────────
       - name: "Build backend image"
         env:
