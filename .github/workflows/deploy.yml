@@ -128,7 +128,7 @@ jobs:
           echo "=== backend: pwd ==="
           cd backend
           echo "=== npm install ===" > backend-build.log
-          npm install --ignore-scripts >> backend-build.log 2>&1
+          npm install --ignore-scripts --legacy-peer-deps >> backend-build.log 2>&1
           echo "=== npm run build ===" >> backend-build.log
           npm run build >> backend-build.log 2>&1
 

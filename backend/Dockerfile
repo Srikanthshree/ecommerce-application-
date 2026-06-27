@@ -18,7 +18,8 @@ WORKDIR /build
 COPY package.json tsconfig.json ./
 
 # `--ignore-scripts` prevents malicious npm postinstall hooks from running
-RUN npm install --ignore-scripts
+# Use --legacy-peer-deps to avoid strict peer dependency resolution failures
+RUN npm install --ignore-scripts --legacy-peer-deps
 
 # Copy application source
 COPY src/ ./src/

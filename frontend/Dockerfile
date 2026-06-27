@@ -13,7 +13,8 @@ WORKDIR /build
 
 COPY package.json ./
 
-RUN npm install --ignore-scripts
+# Use --legacy-peer-deps to avoid strict peer dependency resolution failures
+RUN npm install --ignore-scripts --legacy-peer-deps
 
 COPY public/ ./public/
 COPY src/    ./src/
