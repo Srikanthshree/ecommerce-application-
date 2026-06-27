@@ -19,7 +19,7 @@ COPY package.json package-lock.json tsconfig.json ./
 
 # `--ignore-scripts` prevents malicious npm postinstall hooks from running
 # `--frozen-lockfile` ensures the exact versions in package-lock.json are used
-RUN npm ci --ignore-scripts
+RUN npm install --ignore-scripts
 
 # Copy application source
 COPY src/ ./src/

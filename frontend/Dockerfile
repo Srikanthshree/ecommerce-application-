@@ -13,7 +13,7 @@ WORKDIR /build
 
 COPY package.json package-lock.json ./
 
-RUN npm ci --ignore-scripts
+RUN npm install --ignore-scripts
 
 COPY public/ ./public/
 COPY src/    ./src/
