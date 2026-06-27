@@ -297,6 +297,10 @@ jobs:
       # ── Create/update K8s Secret containing the Secrets Manager ARN ──────
       # The actual DB password is NOT stored here — only the ARN is.
       # The Node.js process calls Secrets Manager at startup to fetch creds.
+      - name: "Ensure ecommerce namespace exists"
+        run: |
+          kubectl create namespace ecommerce --dry-run=client -o yaml | kubectl apply -f -
+
       - name: "Upsert backend-secrets K8s Secret"
         run: |
           kubectl create secret generic backend-secrets \
