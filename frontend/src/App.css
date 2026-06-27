@@ -1,0 +1,7 @@
+.app { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+.app-header { text-align: center; margin: 2rem 0; }
+.status-card { max-width: 720px; margin: 0 auto; }
+.status-loading { color: #666; }
+.status-error { color: #c00; }
+.ok { color: #0a0; }
+.degraded { color: #c60; }
