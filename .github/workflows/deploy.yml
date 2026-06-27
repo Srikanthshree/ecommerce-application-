@@ -179,6 +179,15 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: docker push "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}"
 
+      - name: "Prepare frontend (generate package-lock) (runner)"
+        run: |
+          set -euo pipefail
+          echo "=== frontend: pwd ==="
+          cd frontend
+          echo "=== npm install --package-lock-only ==="
+          npm install --package-lock-only --legacy-peer-deps
+
+
       # ── Frontend ─────────────────────────────────────────────────────────
       - name: "Build frontend image"
         env:

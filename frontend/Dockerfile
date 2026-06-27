@@ -11,10 +11,11 @@ FROM node:18-alpine AS builder
 
 WORKDIR /build
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 
-# Use --legacy-peer-deps to avoid strict peer dependency resolution failures
-RUN npm install --ignore-scripts --legacy-peer-deps
+# Use deterministic install using the lockfile generated on the runner
+# `npm ci` is faster and ensures the lockfile is respected
+RUN npm ci --ignore-scripts --legacy-peer-deps
 
 COPY public/ ./public/
 COPY src/    ./src/
