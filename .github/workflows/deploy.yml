@@ -122,16 +122,39 @@ jobs:
           echo "== npm version =="
           npm --version || true
 
+      - name: "Prepare backend (install + build) (runner)"
+        run: |
+          set -euo pipefail
+          echo "=== backend: pwd ==="
+          cd backend
+          echo "=== npm ci ===" > backend-build.log
+          npm ci --ignore-scripts >> backend-build.log 2>&1
+          echo "=== npm run build ===" >> backend-build.log
+          npm run build >> backend-build.log 2>&1
+
+      - name: "Upload backend build log"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-build-log
+          path: backend/backend-build.log
+
       # ── Backend ──────────────────────────────────────────────────────────
       - name: "Build backend image"
         env:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          docker build \
-            --no-cache \
-            --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" \
-            ./backend
+          set -o pipefail
+          mkdir -p logs
+          docker build --progress=plain --no-cache --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" ./backend 2>&1 | tee logs/docker-backend-build.log
+
+      - name: "Upload docker backend build log"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-backend-build-log
+          path: logs/docker-backend-build.log
 
       - name: "Trivy — scan backend image"
         uses: aquasecurity/trivy-action@v0.36.0
