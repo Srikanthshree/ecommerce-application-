@@ -139,6 +139,21 @@ jobs:
           name: backend-build-log
           path: backend/backend-build.log
 
+      - name: "Commit backend build log to ci-logs branch"
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b ci-logs || git switch ci-logs
+          mkdir -p ci-logs
+          cp backend/backend-build.log ci-logs/backend-build-${GITHUB_RUN_ID}.log || true
+          git add ci-logs/backend-build-${GITHUB_RUN_ID}.log
+          git commit -m "ci: add backend build log for run ${GITHUB_RUN_ID}" || echo "no changes to commit"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}" HEAD:refs/heads/ci-logs --force
+
       # ── Backend ──────────────────────────────────────────────────────────
       - name: "Build backend image"
         env:
