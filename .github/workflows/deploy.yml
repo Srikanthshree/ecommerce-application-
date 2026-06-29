@@ -139,6 +139,15 @@ jobs:
           name: backend-build-log
           path: backend/backend-build.log
 
+      - name: "Show backend artifacts (runner)"
+        run: |
+          echo "=== backend directory listing ==="
+          ls -la backend || true
+          echo "=== backend/dist listing ==="
+          ls -la backend/dist || true
+          echo "=== backend/node_modules listing (first 20) ==="
+          ls -la backend/node_modules | head -n 20 || true
+
       # ── Backend ──────────────────────────────────────────────────────────
       - name: "Build backend image"
         env:
@@ -147,7 +156,17 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p logs
-          docker build --progress=plain --no-cache --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" ./backend 2>&1 | tee logs/docker-backend-build.log
+
+          # Prefer the prebuilt target if CI prepared `backend/dist` and `backend/node_modules`.
+          if [ -d backend/dist ]; then
+            echo "Using Docker build target: production-prebuilt (prebuilt dist present)"
+            TARGET_ARG="--target production-prebuilt"
+          else
+            echo "Using Docker build target: production (build inside image)"
+            TARGET_ARG=""
+          fi
+
+          docker build --progress=plain --no-cache $TARGET_ARG --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" ./backend 2>&1 | tee logs/docker-backend-build.log
 
       - name: "Upload docker backend build log"
         if: always()

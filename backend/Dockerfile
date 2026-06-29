@@ -75,3 +75,48 @@ HEALTHCHECK \
     }).on('error', () => process.exit(1));"
 
 CMD ["node", "dist/index.js"]
+
+
+# -----------------------------------------------------------------------------
+# Production image when the build artifacts are produced on the CI runner
+# (the workflow prepares `backend/dist` and `backend/node_modules`). This
+# target copies the prebuilt assets from the build context instead of
+# re-running the TypeScript build inside the image. The CI uses this target
+# to guarantee the final image always contains `dist/index.js`.
+# -----------------------------------------------------------------------------
+FROM node:20.15.0-alpine3.20 AS production-prebuilt
+
+# Apply OS updates in one layer
+RUN apk update \
+ && apk upgrade --no-cache \
+ && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN addgroup --system --gid 1001 appgroup \
+ && adduser  --system --uid 1001 --ingroup appgroup --no-create-home appuser
+
+WORKDIR /app
+
+# Copy prebuilt artifacts from the build context (created by the CI runner)
+COPY --chown=appuser:appgroup dist         ./dist
+COPY --chown=appuser:appgroup package.json ./package.json
+
+# Install production dependencies inside the image so native modules are
+# compiled for the container's runtime environment (avoids host -> image
+# platform mismatches when copying node_modules from the runner).
+RUN npm install --omit=dev --legacy-peer-deps --no-audit --production
+
+# Read-only permissions and non-root user
+RUN chmod -R 550 /app
+USER appuser
+
+EXPOSE 8080
+
+HEALTHCHECK \
+  --interval=30s \
+  --timeout=5s   \
+  --start-period=15s \
+  --retries=3    \
+  CMD node -e "require('http').get('http://localhost:3000/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+
+CMD ["node", "dist/index.js"]
