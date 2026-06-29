@@ -58,7 +58,9 @@ RUN echo "=== /app/dist contents in production stage ==" \
     && find /app/dist -type f | sort \
     && test -f /app/dist/index.js \
     || (echo "FATAL: /app/dist/index.js is missing from the production image" && exit 1)
-
+# Chown the entire /app directory to appuser:appgroup (since WORKDIR creates
+# it as root), then apply restrictive permissions
+RUN chown -R appuser:appgroup /app
 # r-xr-x--- for owner (appuser) and group (appgroup); no access for others
 RUN chmod -R 550 /app
 
