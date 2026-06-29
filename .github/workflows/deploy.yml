@@ -376,7 +376,7 @@ jobs:
         run: |
           kubectl rollout status deployment/backend  \
             --namespace ecommerce \
-            --timeout   300s
+            --timeout   30s
 
       - name: "Debug backend pods on failure"
         if: failure()
@@ -406,13 +406,13 @@ jobs:
         run: |
           kubectl rollout status deployment/frontend \
             --namespace ecommerce \
-            --timeout   300s
+            --timeout   30s
 
       - name: "Wait for catalog rollout"
         run: |
           kubectl rollout status deployment/catalog \
             --namespace ecommerce \
-            --timeout   300s
+            --timeout   30s
 
       # ── Post-deploy verification ──────────────────────────────────────────
       - name: "Verify running pods"

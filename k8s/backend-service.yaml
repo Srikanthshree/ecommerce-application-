@@ -30,7 +30,7 @@ data:
   # Comma-separated list of frontend origins allowed by the CORS policy
   allowed_origins: "https://your-domain.com"
   log_level:       "info"
-  port:            "3000"
+  port:            "8080"
   aws_region:      "us-east-1"
 
 ---
@@ -51,6 +51,6 @@ spec:
     app: backend
   ports:
     - name:       http
-      port:       3000
-      targetPort: 3000
+      port:       8080
+      targetPort: 8080
       protocol:   TCP
