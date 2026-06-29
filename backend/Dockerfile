@@ -57,7 +57,7 @@ RUN chmod -R 550 /app
 USER appuser
 
 # Declare the port the process listens on (documentation only — does not publish)
-EXPOSE 3000
+EXPOSE 8080
 
 # K8s liveness / readiness probe target
 HEALTHCHECK \
