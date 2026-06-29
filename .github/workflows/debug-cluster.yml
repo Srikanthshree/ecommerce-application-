@@ -1,0 +1,54 @@
+name: debug-cluster
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials (assume role)
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.IRSA_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
+
+      - name: CoreDNS and kube-dns checks
+        run: |
+          kubectl -n kube-system get pods -o wide -l k8s-app=kube-dns || true
+          kubectl -n kube-system logs -l k8s-app=kube-dns --tail=200 || true
+          kubectl -n kube-system get pods -o wide -l k8s-app=coredns || true
+          kubectl -n kube-system logs -l k8s-app=coredns --tail=200 || true
+          kubectl -n kube-system get endpoints kube-dns -o yaml || true
+          kubectl -n kube-system describe configmap coredns || true
+
+      - name: Run DNS + HTTPS checks from inside cluster (netshoot)
+        run: |
+          kubectl -n ecommerce run debug --image=nicolaka/netshoot --restart=Never --command -- sleep 300
+          kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.us-east-1.amazonaws.com || true; dig +short secretsmanager.us-east-1.amazonaws.com || true; curl -sS -D- https://sts.us-east-1.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.us-east-1.amazonaws.com -o /dev/null || true"
+          kubectl -n ecommerce delete pod debug --wait=false || true
+
+      - name: Collect backend & catalog logs
+        run: |
+          kubectl -n ecommerce logs -l app=backend --tail=300 > backend-logs.txt || true
+          kubectl -n ecommerce logs -l app=catalog --tail=300 > catalog-logs.txt || true
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: debug-logs
+          path: backend-logs.txt,catalog-logs.txt
