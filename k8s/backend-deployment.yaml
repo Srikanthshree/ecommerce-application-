@@ -67,7 +67,7 @@ spec:
 
           ports:
             - name:          http
-              containerPort: 3000
+              containerPort: 8080
               protocol:      TCP
 
           # ── Container-level security context ──────────────────────────────
@@ -127,7 +127,7 @@ spec:
           startupProbe:
             httpGet:
               path: /health
-              port: 3000
+              port: 8080
             initialDelaySeconds: 30
             periodSeconds:       5
             timeoutSeconds:      5
@@ -136,7 +136,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 3000
+              port: 8080
             initialDelaySeconds: 0
             periodSeconds:       15
             timeoutSeconds:      5
@@ -145,7 +145,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: 3000
+              port: 8080
             initialDelaySeconds: 0
             periodSeconds:       5
             timeoutSeconds:      3

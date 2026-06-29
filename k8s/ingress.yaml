@@ -9,7 +9,7 @@
 #
 # Path routing:
 #   /api/v1/products* → catalog:8000  (Python FastAPI)
-#   /api/*            → backend:3000  (Node.js)
+#   /api/*            → backend:8080  (Node.js)
 #   /*                → frontend:8080 (React SPA)
 # =============================================================================
 apiVersion: networking.k8s.io/v1
@@ -48,7 +48,7 @@ spec:
               service:
                 name: backend
                 port:
-                  number: 3000
+                  number: 8080
 
           # Frontend — React SPA (catch-all)
           - path: /

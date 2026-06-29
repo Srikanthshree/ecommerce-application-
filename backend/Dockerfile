@@ -67,8 +67,8 @@ RUN chmod -R 550 /app
 # Drop to non-root before any further instructions
 USER appuser
 
-# App listens on PORT env var (default 3000, set by ConfigMap key "port")
-EXPOSE 3000
+# App listens on PORT env var (default 8080, set by ConfigMap key "port")
+EXPOSE 8080
 
 # K8s liveness / readiness probe target
 HEALTHCHECK \
@@ -77,7 +77,7 @@ HEALTHCHECK \
   --start-period=30s \
   --retries=3    \
   CMD node -e "\
-    require('http').get('http://localhost:3000/health', (r) => { \
+    require('http').get('http://localhost:8080/health', (r) => { \
       process.exit(r.statusCode === 200 ? 0 : 1); \
     }).on('error', () => process.exit(1));"
 

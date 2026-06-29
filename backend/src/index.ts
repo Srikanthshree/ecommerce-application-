@@ -3,7 +3,7 @@ import { connectWithRetry } from './config/database';
 import { setDbPool, getDbPool } from './routes/health';
 import logger from './utils/logger';
 
-const PORT = parseInt(process.env.PORT ?? '3000', 10);
+const PORT = parseInt(process.env.PORT ?? '8080', 10);
 let dbReady = false;
 
 async function main(): Promise<void> {
