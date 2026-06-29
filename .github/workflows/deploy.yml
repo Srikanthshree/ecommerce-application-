@@ -102,71 +102,21 @@ jobs:
         id: tag
         run: echo "TAG=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      - name: "Debug runner environment"
-        run: |
-          echo "=== Debug runner: $(date) ==="
-          echo "== whoami =="
-          id || whoami || true
-          echo "== pwd =="
-          pwd
-          echo "== ls repo root =="
-          ls -la
-          echo "== ls backend =="
-          ls -la backend || true
-          echo "== backend package.json =="
-          cat backend/package.json || true
-          echo "== docker version =="
-          docker --version || true
-          echo "== node version =="
-          node --version || true
-          echo "== npm version =="
-          npm --version || true
-
-      - name: "Prepare backend (install + build) (runner)"
-        run: |
-          set -euo pipefail
-          echo "=== backend: pwd ==="
-          cd backend
-          echo "=== npm install ===" > backend-build.log
-          npm install --ignore-scripts --legacy-peer-deps >> backend-build.log 2>&1
-          echo "=== npm run build ===" >> backend-build.log
-          npm run build >> backend-build.log 2>&1
-
-      - name: "Upload backend build log"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-build-log
-          path: backend/backend-build.log
-
-      - name: "Show backend artifacts (runner)"
-        run: |
-          echo "=== backend directory listing ==="
-          ls -la backend || true
-          echo "=== backend/dist listing ==="
-          ls -la backend/dist || true
-          echo "=== backend/node_modules listing (first 20) ==="
-          ls -la backend/node_modules | head -n 20 || true
-
-      # ── Backend ──────────────────────────────────────────────────────────
+      # ── Backend: self-contained multi-stage Docker build ─────────────────
+      # tsc runs inside the builder stage. If tsc fails, docker build fails
+      # immediately with a clear error — no silent partial dist/ possible.
       - name: "Build backend image"
         env:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p logs
-
-          # Prefer the prebuilt target if CI prepared `backend/dist` and `backend/node_modules`.
-          if [ -d backend/dist ]; then
-            echo "Using Docker build target: production-prebuilt (prebuilt dist present)"
-            TARGET_ARG="--target production-prebuilt"
-          else
-            echo "Using Docker build target: production (build inside image)"
-            TARGET_ARG=""
-          fi
-
-          docker build --progress=plain --no-cache $TARGET_ARG --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" ./backend 2>&1 | tee logs/docker-backend-build.log
+          docker build \
+            --progress=plain \
+            --no-cache \
+            --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" \
+            ./backend 2>&1 | tee logs/docker-backend-build.log
 
       - name: "Upload docker backend build log"
         if: always()
@@ -197,15 +147,6 @@ jobs:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: docker push "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}"
-
-      - name: "Prepare frontend (generate package-lock) (runner)"
-        run: |
-          set -euo pipefail
-          echo "=== frontend: pwd ==="
-          cd frontend
-          echo "=== npm install --package-lock-only ==="
-          npm install --package-lock-only --legacy-peer-deps
-
 
       # ── Frontend ─────────────────────────────────────────────────────────
       - name: "Build frontend image"

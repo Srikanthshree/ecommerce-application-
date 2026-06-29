@@ -45,7 +45,7 @@ RUN chmod -R 550 /app
 
 USER appuser
 
-EXPOSE 3000
+EXPOSE 8000
 
 # Start uvicorn with 2 workers; Kubernetes HPA controls scaling
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
