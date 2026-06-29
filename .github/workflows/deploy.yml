@@ -355,6 +355,20 @@ jobs:
           sed -i "s|IRSA_ROLE_ARN|${IRSA_ROLE_ARN}|g" k8s/catalog-deployment.yaml
 
           # Apply all manifests
+          # Apply ServiceAccount + ConfigMap first to avoid race where the
+          # Deployment is created before the ServiceAccount exists.
+          kubectl apply -f k8s/backend-service.yaml || true
+
+          # Wait briefly for the ServiceAccount to be visible to the API server
+          for i in $(seq 1 30); do
+            if kubectl get sa backend -n ecommerce >/dev/null 2>&1; then
+              echo "ServiceAccount 'backend' exists." && break
+            fi
+            echo "Waiting for ServiceAccount 'backend'... ($i)";
+            sleep 1
+          done
+
+          # Apply remaining manifests
           kubectl apply -f k8s/
 
       # ── Wait for rollout to complete ──────────────────────────────────────
