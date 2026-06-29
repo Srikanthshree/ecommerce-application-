@@ -27,6 +27,10 @@ COPY src/ ./src/
 # Compile TypeScript
 RUN npm run build
 
+# Diagnostics: print build output so CI logs show whether `dist/` was created
+RUN echo "=== /build contents ===" && ls -la /build || true
+RUN echo "=== /build/dist contents ===" && ls -la /build/dist || true
+
 # Prune devDependencies — only production deps will be copied to stage 2
 RUN npm prune --omit=dev
 
