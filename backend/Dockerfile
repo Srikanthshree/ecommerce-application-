@@ -52,6 +52,13 @@ COPY --from=builder --chown=appuser:appgroup /build/dist         ./dist
 COPY --from=builder --chown=appuser:appgroup /build/node_modules ./node_modules
 COPY --from=builder --chown=appuser:appgroup /build/package.json ./package.json
 
+# ── Hard verify dist/index.js made it into this stage (runs as root, before
+# USER switch, so permissions never block the check)
+RUN echo "=== /app/dist contents in production stage ==" \
+    && find /app/dist -type f | sort \
+    && test -f /app/dist/index.js \
+    || (echo "FATAL: /app/dist/index.js is missing from the production image" && exit 1)
+
 # r-xr-x--- for owner (appuser) and group (appgroup); no access for others
 RUN chmod -R 550 /app
 
@@ -72,4 +79,7 @@ HEALTHCHECK \
       process.exit(r.statusCode === 200 ? 0 : 1); \
     }).on('error', () => process.exit(1));"
 
-CMD ["node", "dist/index.js"]
+# Use sh -c so the shell shows the file listing before running node.
+# This is critical for debugging: if the container crashes, the logs will
+# show exactly what is (or isn't) inside /app/dist.
+CMD ["sh", "-c", "echo '=== /app/dist at runtime ===' && ls -la /app/dist && node dist/index.js"]
