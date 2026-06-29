@@ -11,11 +11,10 @@ FROM node:18-alpine AS builder
 
 WORKDIR /build
 
-COPY package.json package-lock.json ./
+COPY package.json ./
 
-# Use deterministic install using the lockfile generated on the runner
-# `npm ci` is faster and ensures the lockfile is respected
-RUN npm ci --ignore-scripts --legacy-peer-deps
+# No lockfile in repo — generate one then install all deps
+RUN npm install --legacy-peer-deps
 
 COPY public/ ./public/
 COPY src/    ./src/
