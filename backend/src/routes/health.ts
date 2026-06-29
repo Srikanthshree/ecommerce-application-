@@ -11,6 +11,10 @@ export function setDbPool(pool: Pool): void {
   dbPool = pool;
 }
 
+export function getDbPool(): Pool | null {
+  return dbPool;
+}
+
 // ── GET /health ──────────────────────────────────────────────────────────────
 // Returns 200 when the service and its DB connection are healthy,
 // or 503 when degraded — used by K8s liveness and readiness probes.
