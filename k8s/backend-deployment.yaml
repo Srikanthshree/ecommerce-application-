@@ -75,7 +75,6 @@ spec:
             runAsNonRoot:             true
             runAsUser:                1001
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem:   true
             capabilities:
               drop: ["ALL"]
             seccompProfile:
@@ -155,7 +154,17 @@ spec:
           volumeMounts:
             - name:      tmp
               mountPath: /tmp
+            - name:      aws-iam-token
+              mountPath: /var/run/secrets/eks.amazonaws.com/serviceaccount
+              readOnly:  true
 
       volumes:
         - name:    tmp
           emptyDir: {}
+        - name: aws-iam-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 86400
+                  audience: sts.amazonaws.com

@@ -114,7 +114,6 @@ spec:
             runAsNonRoot:             true
             runAsUser:                1001
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem:   true
             capabilities:
               drop: ["ALL"]
             seccompProfile:
@@ -146,6 +145,14 @@ spec:
                 secretKeyRef:
                   name: backend-secrets      # shared secret with backend
                   key:  db_secret_arn
+            - name: AWS_ROLE_ARN
+              value: "arn:aws:iam::986314681697:role/ecommerce-app-irsa-role"
+            - name: AWS_WEB_IDENTITY_TOKEN_FILE
+              value: /var/run/secrets/eks.amazonaws.com/serviceaccount/token
+            - name: AWS_REGION
+              value: us-east-1
+            - name: AWS_STS_REGIONAL_ENDPOINTS
+              value: regional
 
           resources:
             requests:
@@ -182,7 +189,17 @@ spec:
           volumeMounts:
             - name:      tmp
               mountPath: /tmp
+            - name:      aws-iam-token
+              mountPath: /var/run/secrets/eks.amazonaws.com/serviceaccount
+              readOnly:  true
 
       volumes:
         - name:    tmp
           emptyDir: {}
+        - name: aws-iam-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 86400
+                  audience: sts.amazonaws.com

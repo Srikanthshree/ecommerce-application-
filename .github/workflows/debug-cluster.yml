@@ -223,6 +223,72 @@ jobs:
           echo "=== CoreDNS ConfigMap ==="
           kubectl -n kube-system get configmap coredns -o yaml | tee coredns-config.txt
 
+      - name: Deep DNS Debugging - CoreDNS Upstream & Pod Resolution
+        run: |
+          echo "=== CoreDNS Pod /etc/resolv.conf (upstream DNS) ==="
+          COREDNS_POD=$(kubectl -n kube-system get pods -l k8s-app=coredns -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$COREDNS_POD" ]; then
+            echo "CoreDNS Pod: $COREDNS_POD"
+            kubectl -n kube-system exec "$COREDNS_POD" -- cat /etc/resolv.conf 2>&1 || echo "Could not read resolv.conf from CoreDNS pod"
+          fi
+          
+          echo ""
+          echo "=== DNS Query Test: sts.us-east-1.amazonaws.com from Backend Pod ==="
+          BACKEND_POD=$(kubectl -n ecommerce get pods -l app=backend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$BACKEND_POD" ]; then
+            echo "Backend Pod: $BACKEND_POD"
+            echo "nslookup output:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'nslookup sts.us-east-1.amazonaws.com 2>&1' || echo "nslookup failed or not available"
+            echo ""
+            echo "getent hosts output:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'getent hosts sts.us-east-1.amazonaws.com 2>&1' || echo "getent failed"
+          fi
+          
+          echo ""
+          echo "=== DNS Query Test: secretsmanager.us-east-1.amazonaws.com from Backend Pod ==="
+          if [ -n "$BACKEND_POD" ]; then
+            echo "nslookup output:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'nslookup secretsmanager.us-east-1.amazonaws.com 2>&1' || echo "nslookup failed"
+            echo ""
+            echo "getent hosts output:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'getent hosts secretsmanager.us-east-1.amazonaws.com 2>&1' || echo "getent failed"
+          fi
+          
+          echo ""
+          echo "=== DNS Query Test: sts.us-east-1.amazonaws.com from Catalog Pod ==="
+          CATALOG_POD=$(kubectl -n ecommerce get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$CATALOG_POD" ]; then
+            echo "Catalog Pod: $CATALOG_POD"
+            echo "nslookup output:"
+            kubectl -n ecommerce exec "$CATALOG_POD" -- sh -c 'nslookup sts.us-east-1.amazonaws.com 2>&1' || echo "nslookup failed or not available"
+          fi
+          
+          echo ""
+          echo "=== Verify CoreDNS Forward Configuration ==="
+          echo "Checking if CoreDNS is configured to forward to EKS private Route 53 (172.20.0.10):"
+          kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -A 5 "forward"
+          
+          echo ""
+          echo "=== Pod DNS Configuration (/etc/resolv.conf from Backend) ==="
+          if [ -n "$BACKEND_POD" ]; then
+            kubectl -n ecommerce exec "$BACKEND_POD" -- cat /etc/resolv.conf 2>&1 || echo "Could not read resolv.conf"
+          fi
+          
+          echo ""
+          echo "=== Test direct connectivity to VPC endpoint IPs (if resolvable) ==="
+          if [ -n "$BACKEND_POD" ]; then
+            echo "Attempting to resolve and test connectivity to STS endpoint:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c '
+              STS_IP=$(getent hosts sts.us-east-1.amazonaws.com | awk "{print \$1}" | head -1 || echo "")
+              if [ -n "$STS_IP" ]; then
+                echo "STS resolved to: $STS_IP"
+                (timeout 5 sh -c "echo \"\" >/dev/tcp/$STS_IP/443" && echo "Port 443 reachable") || echo "Port 443 not reachable (expected if SG blocks)"
+              else
+                echo "Could not resolve STS IP"
+              fi
+            ' 2>&1 || true
+          fi
+
       - name: Check network policies and security groups
         run: |
           echo "=== Network Policies in ecommerce namespace ==="
