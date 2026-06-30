@@ -128,10 +128,10 @@ spec:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 90
             periodSeconds:       5
             timeoutSeconds:      5
-            failureThreshold:    20   # Allow up to 130 s (30 + 20*5) for AWS credential fetch + DB init
+            failureThreshold:    60   # Allow up to 390 s (90 + 60*5) for AWS credential fetch + DB init + DNS resolution
 
           livenessProbe:
             httpGet:
