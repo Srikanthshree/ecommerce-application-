@@ -61,7 +61,10 @@ async function buildPool(): Promise<Pool> {
 }
 
 // ── Connect with exponential back-off ────────────────────────────────────────
-const MAX_RETRIES      = 5;
+// IRSA / STS / Secrets Manager DNS lookups can fail transiently during pod
+// startup inside EKS. Keep retrying for several minutes before treating the
+// startup as fatal so Kubernetes can ride out brief AWS network hiccups.
+const MAX_RETRIES      = 12;
 const BASE_DELAY_MS    = 1_000;
 const MAX_DELAY_MS     = 30_000;
 
