@@ -38,34 +38,8 @@ jobs:
 
       - name: Run DNS + HTTPS checks from inside cluster (netshoot)
         run: |
-          cat <<'EOF' > debug-pod.yaml
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: debug
-            namespace: ecommerce
-          spec:
-            restartPolicy: Never
-            securityContext:
-              runAsNonRoot: true
-              runAsUser: 1000
-              seccompProfile:
-                type: RuntimeDefault
-            containers:
-            - name: debug
-              image: nicolaka/netshoot
-              command: ["sleep", "300"]
-              securityContext:
-                allowPrivilegeEscalation: false
-                capabilities:
-                  drop: ["ALL"]
-                runAsNonRoot: true
-                runAsUser: 1000
-                seccompProfile:
-                  type: RuntimeDefault
-          EOF
-
-          kubectl apply -f debug-pod.yaml || true
+          # Create debug pod using kubectl run with JSON overrides to avoid here-docs
+          kubectl -n ecommerce run debug --image=nicolaka/netshoot --restart=Never --overrides '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"debug","image":"nicolaka/netshoot","command":["sleep","300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' --command -- sleep 300 || true
 
           # Wait for pod to be Running and container to be ready (max ~180s)
           ready=0
@@ -82,7 +56,6 @@ jobs:
           if [ "$ready" = "1" ]; then
             kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com || true; dig +short secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com || true; curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true"
             kubectl -n ecommerce delete pod debug --wait=false || true
-            rm -f debug-pod.yaml || true
           else
             echo "Pod did not become ready within timeout. Collecting diagnostics..."
             kubectl -n ecommerce describe pod debug || true
@@ -90,40 +63,12 @@ jobs:
             kubectl -n ecommerce get events -n ecommerce --sort-by='.lastTimestamp' || true
             kubectl -n ecommerce logs pod/debug --all-containers --tail=200 || true
 
-            # Try a lightweight fallback pod (curlimages) which often pulls faster
-            cat <<'EOF' > debug-fallback.yaml
-            apiVersion: v1
-            kind: Pod
-            metadata:
-              name: debug-fallback
-              namespace: ecommerce
-            spec:
-              restartPolicy: Never
-              securityContext:
-                runAsNonRoot: true
-                runAsUser: 1000
-                seccompProfile:
-                  type: RuntimeDefault
-              containers:
-              - name: curl
-                image: curlimages/curl:8.8.1
-                command: ["sleep", "30"]
-                securityContext:
-                  allowPrivilegeEscalation: false
-                  capabilities:
-                    drop: ["ALL"]
-                  runAsNonRoot: true
-                  runAsUser: 1000
-                  seccompProfile:
-                    type: RuntimeDefault
-            EOF
-
-            kubectl apply -f debug-fallback.yaml || true
+            # Fallback: try a lightweight curl pod
+            kubectl -n ecommerce run debug-fallback --image=curlimages/curl:8.8.1 --restart=Never --overrides '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug-fallback"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"curl","image":"curlimages/curl:8.8.1","command":["sleep","30"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' --command -- sleep 30 || true
             kubectl -n ecommerce wait --for=condition=Ready pod/debug-fallback --timeout=60s || true
             kubectl -n ecommerce exec debug-fallback -- /bin/sh -lc "curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true" || true
             kubectl -n ecommerce delete pod debug-fallback --wait=false || true
             kubectl -n ecommerce delete pod debug --wait=false || true
-            rm -f debug-pod.yaml debug-fallback.yaml || true
           fi
 
       - name: Collect backend & catalog logs
