@@ -66,10 +66,65 @@ jobs:
           EOF
 
           kubectl apply -f debug-pod.yaml || true
-          kubectl -n ecommerce wait --for=condition=Ready pod/debug --timeout=60s || true
-          kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com || true; dig +short secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com || true; curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true"
-          kubectl -n ecommerce delete pod debug --wait=false || true
-          rm -f debug-pod.yaml || true
+
+          # Wait for pod to be Running and container to be ready (max ~180s)
+          ready=0
+          for i in {1..36}; do
+            phase=$(kubectl -n ecommerce get pod debug -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+            contready=$(kubectl -n ecommerce get pod debug -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null || echo "false")
+            if [ "${phase}" = "Running" ] && [ "${contready}" = "true" ]; then
+              ready=1
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$ready" = "1" ]; then
+            kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com || true; dig +short secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com || true; curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true"
+            kubectl -n ecommerce delete pod debug --wait=false || true
+            rm -f debug-pod.yaml || true
+          else
+            echo "Pod did not become ready within timeout. Collecting diagnostics..."
+            kubectl -n ecommerce describe pod debug || true
+            kubectl -n ecommerce get pod debug -o yaml || true
+            kubectl -n ecommerce get events -n ecommerce --sort-by='.lastTimestamp' || true
+            kubectl -n ecommerce logs pod/debug --all-containers --tail=200 || true
+
+            # Try a lightweight fallback pod (curlimages) which often pulls faster
+            cat <<'EOF' > debug-fallback.yaml
+            apiVersion: v1
+            kind: Pod
+            metadata:
+              name: debug-fallback
+              namespace: ecommerce
+            spec:
+              restartPolicy: Never
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+              containers:
+              - name: curl
+                image: curlimages/curl:8.8.1
+                command: ["sleep", "30"]
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop: ["ALL"]
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  seccompProfile:
+                    type: RuntimeDefault
+            EOF
+
+            kubectl apply -f debug-fallback.yaml || true
+            kubectl -n ecommerce wait --for=condition=Ready pod/debug-fallback --timeout=60s || true
+            kubectl -n ecommerce exec debug-fallback -- /bin/sh -lc "curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true" || true
+            kubectl -n ecommerce delete pod debug-fallback --wait=false || true
+            kubectl -n ecommerce delete pod debug --wait=false || true
+            rm -f debug-pod.yaml debug-fallback.yaml || true
+          fi
 
       - name: Collect backend & catalog logs
         run: |
