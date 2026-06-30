@@ -105,17 +105,166 @@ jobs:
             kubectl -n ecommerce delete pod debug --wait=false || true
           fi
 
-      - name: Collect backend & catalog logs
+      - name: Collect backend & catalog logs + full diagnostics
         run: |
-          kubectl -n ecommerce logs -l app=backend --tail=300 > backend-logs.txt 2>&1 || true
-          kubectl -n ecommerce logs -l app=catalog --tail=300 > catalog-logs.txt 2>&1 || true
+          echo "=== Backend Pod Logs ==="
+          kubectl -n ecommerce logs -l app=backend --tail=500 --all-containers=true > backend-logs.txt 2>&1 || true
+          cat backend-logs.txt
+          
+          echo ""
+          echo "=== Catalog Pod Logs ==="
+          kubectl -n ecommerce logs -l app=catalog --tail=500 --all-containers=true > catalog-logs.txt 2>&1 || true
+          cat catalog-logs.txt
+          
+          echo ""
+          echo "=== Backend Pod Describe (with events) ==="
+          kubectl -n ecommerce describe pod -l app=backend > backend-describe.txt 2>&1 || true
+          cat backend-describe.txt
+          
+          echo ""
+          echo "=== Catalog Pod Describe (with events) ==="
+          kubectl -n ecommerce describe pod -l app=catalog > catalog-describe.txt 2>&1 || true
+          cat catalog-describe.txt
+          
+          echo ""
+          echo "=== All Ecommerce Events ==="
+          kubectl -n ecommerce get events --sort-by='.lastTimestamp' > ecommerce-events.txt 2>&1 || true
+          cat ecommerce-events.txt
+          
+          echo ""
+          echo "=== Backend Startup Probe Status ==="
+          kubectl -n ecommerce get pod -l app=backend -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].state}{"\n"}{end}' > backend-probe-status.txt 2>&1 || true
+          cat backend-probe-status.txt
+          
+          echo ""
+          echo "=== Catalog Startup Probe Status ==="
+          kubectl -n ecommerce get pod -l app=catalog -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].state}{"\n"}{end}' > catalog-probe-status.txt 2>&1 || true
+          cat catalog-probe-status.txt
+          
           # Ensure files exist so artifact upload sees them
-          touch backend-logs.txt catalog-logs.txt || true
+          touch backend-logs.txt catalog-logs.txt backend-describe.txt catalog-describe.txt ecommerce-events.txt backend-probe-status.txt catalog-probe-status.txt || true
 
-      - name: Upload logs
+      - name: Check IRSA credentials and environment from running pods
+        run: |
+          echo "=== Checking IRSA token file and credentials from backend pod ==="
+          BACKEND_POD=$(kubectl -n ecommerce get pods -l app=backend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$BACKEND_POD" ]; then
+            echo "Backend pod: $BACKEND_POD"
+            
+            echo "IRSA token file check:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c "test -f /var/run/secrets/eks.amazonaws.com/serviceaccount/token && echo 'Token file exists' && head -c 50 /var/run/secrets/eks.amazonaws.com/serviceaccount/token && echo '...' || echo 'Token file NOT found'" 2>&1 || true
+            
+            echo ""
+            echo "Environment variables (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE):"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'echo "AWS_ROLE_ARN: $AWS_ROLE_ARN"; echo "AWS_WEB_IDENTITY_TOKEN_FILE: $AWS_WEB_IDENTITY_TOKEN_FILE"; echo "AWS_REGION: $AWS_REGION"' 2>&1 || true
+            
+            echo ""
+            echo "ServiceAccount token claim:"
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'cat /var/run/secrets/eks.amazonaws.com/serviceaccount/token | cut -d. -f2 | base64 -d 2>/dev/null | head -c 200' 2>&1 || true
+            
+          else
+            echo "No backend pod found"
+          fi
+          
+          echo ""
+          echo "=== Checking IRSA token file and credentials from catalog pod ==="
+          CATALOG_POD=$(kubectl -n ecommerce get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$CATALOG_POD" ]; then
+            echo "Catalog pod: $CATALOG_POD"
+            
+            echo "IRSA token file check:"
+            kubectl -n ecommerce exec "$CATALOG_POD" -- sh -c "test -f /var/run/secrets/eks.amazonaws.com/serviceaccount/token && echo 'Token file exists' && head -c 50 /var/run/secrets/eks.amazonaws.com/serviceaccount/token && echo '...' || echo 'Token file NOT found'" 2>&1 || true
+            
+            echo ""
+            echo "Environment variables (AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE):"
+            kubectl -n ecommerce exec "$CATALOG_POD" -- sh -c 'echo "AWS_ROLE_ARN: $AWS_ROLE_ARN"; echo "AWS_WEB_IDENTITY_TOKEN_FILE: $AWS_WEB_IDENTITY_TOKEN_FILE"; echo "AWS_REGION: $AWS_REGION"' 2>&1 || true
+          else
+            echo "No catalog pod found"
+          fi
+
+      - name: Check VPC endpoints and network connectivity
+        run: |
+          echo "=== Checking VPC endpoints status ==="
+          aws ec2 describe-vpc-endpoints \
+            --filters "Name=tag:Name,Values=ecommerce-*-endpoint" \
+            --query 'VpcEndpoints[*].[ServiceName,State,Tags[?Key==`Name`].Value|[0]]' \
+            --output table \
+            --region ${{ secrets.AWS_REGION }} || true
+          
+          echo ""
+          echo "=== Testing DNS resolution to AWS services from backend pod ==="
+          BACKEND_POD=$(kubectl -n ecommerce get pods -l app=backend -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$BACKEND_POD" ]; then
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'nslookup sts.us-east-1.amazonaws.com || getent hosts sts.us-east-1.amazonaws.com' 2>&1 || true
+            kubectl -n ecommerce exec "$BACKEND_POD" -- sh -c 'nslookup secretsmanager.us-east-1.amazonaws.com || getent hosts secretsmanager.us-east-1.amazonaws.com' 2>&1 || true
+          fi
+          
+          echo ""
+          echo "=== Testing DNS resolution from catalog pod ==="
+          CATALOG_POD=$(kubectl -n ecommerce get pods -l app=catalog -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$CATALOG_POD" ]; then
+            kubectl -n ecommerce exec "$CATALOG_POD" -- sh -c 'nslookup sts.us-east-1.amazonaws.com || getent hosts sts.us-east-1.amazonaws.com' 2>&1 || true
+          fi
+
+      - name: Check CoreDNS status and logs (detailed)
+        run: |
+          echo "=== CoreDNS Pods Status ==="
+          kubectl -n kube-system get pods -l k8s-app=coredns -o wide
+          
+          echo ""
+          echo "=== CoreDNS Resource Requests/Limits ==="
+          kubectl -n kube-system get pods -l k8s-app=coredns -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].resources}{"\n"}{end}'
+          
+          echo ""
+          echo "=== CoreDNS Logs (last 200 lines) ==="
+          kubectl -n kube-system logs -l k8s-app=coredns --tail=200 --all-containers=true | tee coredns-logs.txt
+          
+          echo ""
+          echo "=== CoreDNS ConfigMap ==="
+          kubectl -n kube-system get configmap coredns -o yaml | tee coredns-config.txt
+
+      - name: Check network policies and security groups
+        run: |
+          echo "=== Network Policies in ecommerce namespace ==="
+          kubectl -n ecommerce get networkpolicies -o wide 2>&1 || echo "No network policies found"
+          
+          echo ""
+          echo "=== Service Accounts in ecommerce ==="
+          kubectl -n ecommerce get serviceaccounts -o wide
+          
+          echo ""
+          echo "=== Backend ServiceAccount (with IRSA annotation) ==="
+          kubectl -n ecommerce get serviceaccount backend -o yaml | tee backend-sa.txt
+          
+          echo ""
+          echo "=== Catalog ServiceAccount (with IRSA annotation) ==="
+          kubectl -n ecommerce get serviceaccount catalog -o yaml | tee catalog-sa.txt
+
+      - name: Check pod startup probe configuration (YAML)
+        run: |
+          echo "=== Backend Deployment startupProbe Configuration ==="
+          kubectl -n ecommerce get deployment backend -o jsonpath='{.spec.template.spec.containers[0].startupProbe}' | tee backend-startup-probe.txt
+          
+          echo ""
+          echo "=== Catalog Deployment startupProbe Configuration ==="
+          kubectl -n ecommerce get deployment catalog -o jsonpath='{.spec.template.spec.containers[0].startupProbe}' | tee catalog-startup-probe.txt
+
+      - name: Upload all diagnostic logs
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: debug-logs
+          name: cluster-diagnostics
           path: |
             backend-logs.txt
             catalog-logs.txt
+            backend-describe.txt
+            catalog-describe.txt
+            ecommerce-events.txt
+            backend-probe-status.txt
+            catalog-probe-status.txt
+            coredns-logs.txt
+            coredns-config.txt
+            backend-sa.txt
+            catalog-sa.txt
+            backend-startup-probe.txt
+            catalog-startup-probe.txt
