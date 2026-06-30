@@ -34,16 +34,27 @@ jobs:
 
       - name: Fix CoreDNS to use EKS private Route 53
         run: |
-          echo "=== Fixing CoreDNS upstream to 172.20.0.10 ==="
-          kubectl patch configmap coredns -n kube-system -p '{"data":{"Corefile":".:53 {\n    errors\n    health {\n        lameduck 5s\n    }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n      pods insecure\n      fallthrough in-addr.arpa ip6.arpa\n    }\n    prometheus :9153\n    forward . 172.20.0.10\n    cache 30\n    loop\n    reload\n    loadbalance\n}"}}'
+          echo "=== Checking current CoreDNS config ==="
+          kubectl get configmap coredns -n kube-system -o yaml | grep -A 20 "Corefile:"
           
           echo ""
-          echo "=== Restarting CoreDNS ==="
-          kubectl rollout restart deployment/coredns -n kube-system
-          kubectl rollout status deployment/coredns -n kube-system --timeout=60s
+          echo "=== Applying CoreDNS fix ==="
+          # Use kubectl edit with a script approach to ensure YAML is correct
+          kubectl -n kube-system patch configmap/coredns --type merge -p '{"data":{"Corefile":".:53 {\n    errors\n    health {\n        lameduck 5s\n    }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n      pods insecure\n      fallthrough in-addr.arpa ip6.arpa\n    }\n    prometheus :9153\n    forward . 172.20.0.10\n    cache 30\n    loop\n    reload\n    loadbalance\n}"}}'
           
-          sleep 10
-          echo "CoreDNS fixed and restarted"
+          echo ""
+          echo "=== Verifying CoreDNS patch ==="
+          kubectl get configmap coredns -n kube-system -o yaml | grep -A 20 "Corefile:"
+          
+          echo ""
+          echo "=== Force restart CoreDNS pods ==="
+          kubectl rollout restart deployment/coredns -n kube-system
+          kubectl wait --for=condition=available --timeout=60s deployment/coredns -n kube-system || true
+          sleep 5
+          
+          echo ""
+          echo "=== CoreDNS pods status ==="
+          kubectl get pods -n kube-system -l k8s-app=kube-dns
 
       - name: Deploy fixed K8s manifests (remove readOnlyRootFilesystem)
         run: |
@@ -53,8 +64,13 @@ jobs:
           kubectl replace -f ecommerce-app/k8s/catalog-deployment.yaml
           
           echo ""
-          echo "=== Waiting for pods to start (90 seconds) ==="
-          sleep 90
+          echo "=== Force restart backend & catalog deployments ==="
+          kubectl rollout restart deployment/backend -n ecommerce
+          kubectl rollout restart deployment/catalog -n ecommerce
+          
+          echo ""
+          echo "=== Waiting for deployments to stabilize (120 seconds) ==="
+          sleep 120
           
           echo ""
           echo "=== Pod Status After Deploy ==="
