@@ -107,11 +107,15 @@ jobs:
 
       - name: Collect backend & catalog logs
         run: |
-          kubectl -n ecommerce logs -l app=backend --tail=300 > backend-logs.txt || true
-          kubectl -n ecommerce logs -l app=catalog --tail=300 > catalog-logs.txt || true
+          kubectl -n ecommerce logs -l app=backend --tail=300 > backend-logs.txt 2>&1 || true
+          kubectl -n ecommerce logs -l app=catalog --tail=300 > catalog-logs.txt 2>&1 || true
+          # Ensure files exist so artifact upload sees them
+          touch backend-logs.txt catalog-logs.txt || true
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
           name: debug-logs
-          path: backend-logs.txt,catalog-logs.txt
+          path: |
+            backend-logs.txt
+            catalog-logs.txt
