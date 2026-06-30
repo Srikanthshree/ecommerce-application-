@@ -27,6 +27,38 @@ jobs:
         run: |
           aws eks update-kubeconfig --name ${{ secrets.EKS_CLUSTER_NAME }} --region ${{ secrets.AWS_REGION }}
 
+      - name: Checkout code (get latest manifests)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fix CoreDNS to use EKS private Route 53
+        run: |
+          echo "=== Fixing CoreDNS upstream to 172.20.0.10 ==="
+          kubectl patch configmap coredns -n kube-system -p '{"data":{"Corefile":".:53 {\n    errors\n    health {\n        lameduck 5s\n    }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n      pods insecure\n      fallthrough in-addr.arpa ip6.arpa\n    }\n    prometheus :9153\n    forward . 172.20.0.10\n    cache 30\n    loop\n    reload\n    loadbalance\n}"}}'
+          
+          echo ""
+          echo "=== Restarting CoreDNS ==="
+          kubectl rollout restart deployment/coredns -n kube-system
+          kubectl rollout status deployment/coredns -n kube-system --timeout=60s
+          
+          sleep 10
+          echo "CoreDNS fixed and restarted"
+
+      - name: Deploy fixed K8s manifests (remove readOnlyRootFilesystem)
+        run: |
+          echo "=== Deploying backend & catalog with permission fixes ==="
+          kubectl apply -f ecommerce-app/k8s/backend-deployment.yaml
+          kubectl apply -f ecommerce-app/k8s/catalog-deployment.yaml
+          
+          echo ""
+          echo "=== Waiting for pods to start (90 seconds) ==="
+          sleep 90
+          
+          echo ""
+          echo "=== Pod Status After Deploy ==="
+          kubectl get pods -n ecommerce -o wide
+
       - name: CoreDNS and kube-dns checks
         run: |
           kubectl -n kube-system get pods -o wide -l k8s-app=kube-dns || true
