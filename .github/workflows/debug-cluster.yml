@@ -36,12 +36,34 @@ jobs:
           kubectl -n kube-system get endpoints kube-dns -o yaml || true
           kubectl -n kube-system describe configmap coredns || true
 
-      - name: Run DNS + HTTPS checks from inside cluster (netshoot)
+      - name: Run DNS + HTTPS checks from inside cluster (debug)
         run: |
-          # Create debug pod using kubectl run with JSON overrides to avoid here-docs
-          kubectl -n ecommerce run debug --image=nicolaka/netshoot --restart=Never --overrides '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"debug","image":"nicolaka/netshoot","command":["sleep","300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' --command -- sleep 300 || true
+          # Prefer reusing an image already pulled from ECR (avoid docker.io pulls)
+          IMAGE=$(kubectl -n ecommerce get pods -l app=backend -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)
+          if [ -z "$IMAGE" ]; then
+            IMAGE=$(kubectl -n ecommerce get pods -l app=catalog -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)
+          fi
+          if [ -z "$IMAGE" ]; then
+            IMAGE=$(kubectl -n ecommerce get pods -l app=frontend -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null || true)
+          fi
+          if [ -z "$IMAGE" ]; then
+            POD_ANY=$(kubectl -n ecommerce get pods --no-headers -o custom-columns=':metadata.name' | head -n1 || true)
+            if [ -n "$POD_ANY" ]; then
+              IMAGE=$(kubectl -n ecommerce get pod "$POD_ANY" -o jsonpath='{.spec.containers[0].image}' 2>/dev/null || true)
+            fi
+          fi
+          if [ -z "$IMAGE" ]; then
+            echo "No suitable image found in namespace ecommerce to reuse. Nodes may not be allowed to pull from Docker Hub. Mirror a debug image into ECR or enable NAT egress."
+            exit 0
+          fi
+          echo "Using image: $IMAGE"
 
-          # Wait for pod to be Running and container to be ready (max ~180s)
+          kubectl -n ecommerce delete pod debug debug-fallback --ignore-not-found --wait=false || true
+
+          overrides=$(printf '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"debug","image":"%s","command":["sh","-c","sleep 300"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' "$IMAGE")
+          kubectl -n ecommerce run debug --image="$IMAGE" --restart=Never --overrides "$overrides" --command -- sleep 300 || true
+
+          # Wait up to 180s for pod/container ready
           ready=0
           for i in {1..36}; do
             phase=$(kubectl -n ecommerce get pod debug -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
@@ -54,7 +76,8 @@ jobs:
           done
 
           if [ "$ready" = "1" ]; then
-            kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com || true; dig +short secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com || true; curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true"
+            echo "Debug pod is Running. Attempting network checks from debug pod..."
+            kubectl -n ecommerce exec debug -- sh -c "cat /etc/resolv.conf || true; (which dig >/dev/null 2>&1 && dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com) || true; (which curl >/dev/null 2>&1 && curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null) || true" || true
             kubectl -n ecommerce delete pod debug --wait=false || true
           else
             echo "Pod did not become ready within timeout. Collecting diagnostics..."
@@ -63,10 +86,21 @@ jobs:
             kubectl -n ecommerce get events -n ecommerce --sort-by='.lastTimestamp' || true
             kubectl -n ecommerce logs pod/debug --all-containers --tail=200 || true
 
-            # Fallback: try a lightweight curl pod
-            kubectl -n ecommerce run debug-fallback --image=curlimages/curl:8.8.1 --restart=Never --overrides '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug-fallback"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"curl","image":"curlimages/curl:8.8.1","command":["sleep","30"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' --command -- sleep 30 || true
+            # Try execing into an existing running pod (backend/catalog/frontend) to run network checks
+            for SVC in backend catalog frontend; do
+              POD=$(kubectl -n ecommerce get pods -l app=$SVC -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+              if [ -n "$POD" ]; then
+                echo "Attempting network checks from pod $POD (app=$SVC)..."
+                kubectl -n ecommerce exec "$POD" -- sh -c "cat /etc/resolv.conf || true; (which dig >/dev/null 2>&1 && dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com) || true; (which curl >/dev/null 2>&1 && curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null) || true" || true
+              fi
+            done
+
+            # Launch a fallback pod using the same ECR image to run simple checks
+            echo "Launching fallback pod (using same image) to run simple checks..."
+            overrides_fb=$(printf '{"apiVersion":"v1","kind":"Pod","metadata":{"name":"debug-fallback"},"spec":{"restartPolicy":"Never","securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"fallback","image":"%s","command":["sh","-c","sleep 30"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}}}]}}' "$IMAGE")
+            kubectl -n ecommerce run debug-fallback --image="$IMAGE" --restart=Never --overrides "$overrides_fb" --command -- sleep 30 || true
             kubectl -n ecommerce wait --for=condition=Ready pod/debug-fallback --timeout=60s || true
-            kubectl -n ecommerce exec debug-fallback -- /bin/sh -lc "curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true" || true
+            kubectl -n ecommerce exec debug-fallback -- sh -c "cat /etc/resolv.conf || true; (which curl >/dev/null 2>&1 && curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null) || true" || true
             kubectl -n ecommerce delete pod debug-fallback --wait=false || true
             kubectl -n ecommerce delete pod debug --wait=false || true
           fi
