@@ -48,8 +48,9 @@ jobs:
       - name: Deploy fixed K8s manifests (remove readOnlyRootFilesystem)
         run: |
           echo "=== Deploying backend & catalog with permission fixes ==="
-          kubectl apply -f ecommerce-app/k8s/backend-deployment.yaml
-          kubectl apply -f ecommerce-app/k8s/catalog-deployment.yaml
+          # Use replace to overwrite broken deployment entirely (fixes patch conflict)
+          kubectl replace -f ecommerce-app/k8s/backend-deployment.yaml
+          kubectl replace -f ecommerce-app/k8s/catalog-deployment.yaml
           
           echo ""
           echo "=== Waiting for pods to start (90 seconds) ==="
