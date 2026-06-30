@@ -38,9 +38,38 @@ jobs:
 
       - name: Run DNS + HTTPS checks from inside cluster (netshoot)
         run: |
-          kubectl -n ecommerce run debug --image=nicolaka/netshoot --restart=Never --command -- sleep 300
-          kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.us-east-1.amazonaws.com || true; dig +short secretsmanager.us-east-1.amazonaws.com || true; curl -sS -D- https://sts.us-east-1.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.us-east-1.amazonaws.com -o /dev/null || true"
+          cat <<'EOF' > debug-pod.yaml
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: debug
+            namespace: ecommerce
+          spec:
+            restartPolicy: Never
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+            - name: debug
+              image: nicolaka/netshoot
+              command: ["sleep", "300"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                runAsNonRoot: true
+                runAsUser: 1000
+                seccompProfile:
+                  type: RuntimeDefault
+          EOF
+
+          kubectl apply -f debug-pod.yaml || true
+          kubectl -n ecommerce wait --for=condition=Ready pod/debug --timeout=60s || true
+          kubectl -n ecommerce exec debug -- /bin/bash -lc "dig +short sts.${{ secrets.AWS_REGION }}.amazonaws.com || true; dig +short secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com || true; curl -sS -D- https://sts.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true; curl -sS -D- https://secretsmanager.${{ secrets.AWS_REGION }}.amazonaws.com -o /dev/null || true"
           kubectl -n ecommerce delete pod debug --wait=false || true
+          rm -f debug-pod.yaml || true
 
       - name: Collect backend & catalog logs
         run: |
