@@ -75,47 +75,86 @@ jobs:
           kubectl get pods -n kube-system -l k8s-app=kube-dns -o wide
           kubectl -n kube-system logs -l k8s-app=kube-dns --tail=20 || true
 
-      - name: Patch deployments - fix securityContext and IRSA (WITHOUT touching image)
+      - name: Ensure backend-secrets + fix ServiceAccount IRSA annotations + patch deployments
         run: |
-          echo "=== Current running images (these will be preserved) ==="
+          # ── Step 1: Create backend-secrets K8s Secret (idempotent) ─────────────────
+          # Both backend and catalog read DB_SECRET_ARN from this secret.
+          # If it doesn't exist, pods fail at container creation (CreateContainerConfigError).
+          echo "=== Ensuring backend-secrets K8s Secret exists ==="
+          kubectl -n ecommerce create secret generic backend-secrets \
+            --from-literal=db_secret_arn="arn:aws:secretsmanager:us-east-1:986314681697:secret:ecommerce/prod/db-credentials-upNQ1r" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "backend-secrets secret: OK"
+
+          # ── Step 2: Fix ServiceAccount IRSA annotations ──────────────────────────
+          # Both backend-service.yaml and catalog-deployment.yaml have the literal
+          # placeholder "IRSA_ROLE_ARN" as the eks.amazonaws.com/role-arn annotation.
+          # The EKS pod identity webhook reads this annotation and INJECTS AWS_ROLE_ARN
+          # into the pod env — overriding (as the last value wins) any correct value
+          # already set in the Deployment spec. Fix both SAs before the rollout.
+          echo ""
+          echo "=== Fixing ServiceAccount IRSA annotations (was literal 'IRSA_ROLE_ARN' placeholder) ==="
+          kubectl -n ecommerce annotate serviceaccount backend \
+            eks.amazonaws.com/role-arn=arn:aws:iam::986314681697:role/ecommerce-app-irsa-role \
+            --overwrite
+          kubectl -n ecommerce annotate serviceaccount catalog \
+            eks.amazonaws.com/role-arn=arn:aws:iam::986314681697:role/ecommerce-app-irsa-role \
+            --overwrite
+          echo "ServiceAccount annotations: OK"
+          kubectl -n ecommerce get serviceaccount backend catalog -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.metadata.annotations.eks\.amazonaws\.com/role-arn}{"\n"}{end}'
+
+          # ── Step 3: Preserve running images ──────────────────────────────────────
+          echo ""
+          echo "=== Current running images (these will NOT be touched) ==="
           kubectl -n ecommerce get deployment backend -o jsonpath='{.spec.template.spec.containers[0].image}'
           echo ""
           kubectl -n ecommerce get deployment catalog -o jsonpath='{.spec.template.spec.containers[0].image}'
           echo ""
 
-          echo "=== Patch backend: remove readOnlyRootFilesystem, ensure IRSA env vars ==="
+          # ── Step 4: Remove readOnlyRootFilesystem if present ─────────────────────
+          # (blocks Python multiprocessing in catalog; safe to remove for both)
           kubectl -n ecommerce patch deployment backend --type=json -p='[
-            {"op":"remove","path":"/spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem"},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_ROLE_ARN","value":"arn:aws:iam::986314681697:role/ecommerce-app-irsa-role"}},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_WEB_IDENTITY_TOKEN_FILE","value":"/var/run/secrets/eks.amazonaws.com/serviceaccount/token"}},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_STS_REGIONAL_ENDPOINTS","value":"regional"}}
-          ]' 2>/dev/null || echo 'Patch may have partially applied (env vars may already exist)'
-
-          echo "=== Patch catalog: remove readOnlyRootFilesystem, ensure IRSA env vars ==="
+            {"op":"remove","path":"/spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem"}
+          ]' 2>/dev/null || echo 'readOnlyRootFilesystem already absent from backend — OK'
           kubectl -n ecommerce patch deployment catalog --type=json -p='[
-            {"op":"remove","path":"/spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem"},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_ROLE_ARN","value":"arn:aws:iam::986314681697:role/ecommerce-app-irsa-role"}},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_WEB_IDENTITY_TOKEN_FILE","value":"/var/run/secrets/eks.amazonaws.com/serviceaccount/token"}},
-            {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"AWS_STS_REGIONAL_ENDPOINTS","value":"regional"}}
-          ]' 2>/dev/null || echo 'Patch may have partially applied (env vars may already exist)'
+            {"op":"remove","path":"/spec/template/spec/containers/0/securityContext/readOnlyRootFilesystem"}
+          ]' 2>/dev/null || echo 'readOnlyRootFilesystem already absent from catalog — OK'
 
-          echo "=== Verify backend deployment securityContext (readOnlyRootFilesystem should NOT appear) ==="
-          kubectl -n ecommerce get deployment backend -o jsonpath='{.spec.template.spec.containers[0].securityContext}'
+          # ── Step 5: Set IRSA env vars (kubectl set env replaces, never duplicates) ─
+          # Using set env instead of json-patch op:add prevents duplicate env entries
+          # that accumulate on repeated pipeline runs (duplicates cause the last value
+          # to win — which was wrong when op:add kept appending IRSA_ROLE_ARN).
           echo ""
-
-          echo "=== Verify IRSA env vars in backend ==="
-          kubectl -n ecommerce get deployment backend -o jsonpath='{.spec.template.spec.containers[0].env}'
+          echo "=== Setting IRSA env vars via kubectl set env (idempotent, no duplicates) ==="
+          kubectl -n ecommerce set env deployment/backend \
+            AWS_ROLE_ARN=arn:aws:iam::986314681697:role/ecommerce-app-irsa-role \
+            AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token \
+            AWS_STS_REGIONAL_ENDPOINTS=regional
+          kubectl -n ecommerce set env deployment/catalog \
+            AWS_ROLE_ARN=arn:aws:iam::986314681697:role/ecommerce-app-irsa-role \
+            AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token \
+            AWS_STS_REGIONAL_ENDPOINTS=regional
+          # Note: kubectl set env already triggers a rollout; explicit restart below
+          # ensures SA annotation change (step 2) is also picked up in the new pods.
           echo ""
+          echo "=== Force rollout restart (ensures SA annotation fix is in effect) ==="
+          kubectl rollout restart deployment/backend deployment/catalog -n ecommerce
 
-          echo "=== Force rollout restart (pods pick up new config) ==="
-          kubectl rollout restart deployment/backend -n ecommerce
-          kubectl rollout restart deployment/catalog -n ecommerce
-
+          echo ""
           echo "=== Waiting 120 seconds for pods to start ==="
           sleep 120
 
+          echo ""
           echo "=== Pod Status ==="
           kubectl get pods -n ecommerce -o wide
+
+          echo ""
+          echo "=== Verify IRSA env vars (should show exactly ONE entry for each, correct ARN) ==="
+          echo "Backend AWS_ROLE_ARN:"
+          kubectl -n ecommerce get deployment backend -o jsonpath='{.spec.template.spec.containers[0].env}' | tr ',' '\n' | grep -A2 AWS_ROLE_ARN
+          echo ""
+          echo "Catalog AWS_ROLE_ARN:"
+          kubectl -n ecommerce get deployment catalog -o jsonpath='{.spec.template.spec.containers[0].env}' | tr ',' '\n' | grep -A2 AWS_ROLE_ARN
 
       - name: CoreDNS and kube-dns checks
         run: |
