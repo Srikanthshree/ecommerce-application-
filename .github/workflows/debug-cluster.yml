@@ -56,39 +56,26 @@ jobs:
           echo "=== CoreDNS pods status ==="
           kubectl get pods -n kube-system -l k8s-app=kube-dns
 
-      - name: Deploy fixed K8s manifests (remove readOnlyRootFilesystem)
+      - name: Deploy fixed K8s manifests
         run: |
           echo "=== Deploying backend & catalog with permission fixes ==="
           echo "=== Repo root listing ==="
-          ls -la || true
+          ls -la
+          
           echo ""
-          echo "=== ecommerce-app directory listing ==="
-          ls -la ecommerce-app || true
-          echo ""
-          echo "=== k8s directory listing ==="
-          ls -la ecommerce-app/k8s || true
-          echo ""
-          echo "=== Deploying manifests from ecommerce-app/k8s ==="
-          cd ecommerce-app || (echo 'ecommerce-app directory missing' && exit 1)
-          if [ -f k8s/backend-deployment.yaml ]; then
-            kubectl replace -f k8s/backend-deployment.yaml || kubectl apply -f k8s/backend-deployment.yaml --force || true
-          else
-            echo "ERROR: k8s/backend-deployment.yaml not found"
-            exit 1
-          fi
-          if [ -f k8s/catalog-deployment.yaml ]; then
-            kubectl replace -f k8s/catalog-deployment.yaml || kubectl apply -f k8s/catalog-deployment.yaml --force || true
-          else
-            echo "ERROR: k8s/catalog-deployment.yaml not found"
-            exit 1
-          fi
+          echo "=== Deploying manifests from k8s/ directory ==="
+          kubectl replace --force -f k8s/backend-deployment.yaml
+          kubectl replace --force -f k8s/catalog-deployment.yaml
+          
           echo ""
           echo "=== Force restart backend & catalog deployments ==="
-          kubectl rollout restart deployment/backend -n ecommerce || true
-          kubectl rollout restart deployment/catalog -n ecommerce || true
+          kubectl rollout restart deployment/backend -n ecommerce
+          kubectl rollout restart deployment/catalog -n ecommerce
+          
           echo ""
           echo "=== Waiting for deployments to stabilize (120 seconds) ==="
           sleep 120
+          
           echo ""
           echo "=== Pod Status After Deploy ==="
           kubectl get pods -n ecommerce -o wide
