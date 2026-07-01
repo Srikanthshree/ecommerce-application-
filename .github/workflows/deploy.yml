@@ -215,14 +215,21 @@ jobs:
           helm repo add eks https://aws.github.io/eks-charts || true
           helm repo update
 
-          # Install ALB controller in kube-system namespace
+          # Install ALB controller in kube-system namespace (without --wait to avoid timeout)
           helm upgrade --install aws-load-balancer-controller \
             eks/aws-load-balancer-controller \
             --namespace kube-system \
             --set clusterName="${{ env.EKS_CLUSTER_NAME }}" \
             --set serviceAccount.create=true \
-            --set serviceAccount.name=aws-load-balancer-controller \
-            --wait
+            --set serviceAccount.name=aws-load-balancer-controller
+
+      # ── Wait for ALB controller to be ready ──────────────────────────────
+      - name: "Wait for AWS Load Balancer Controller"
+        run: |
+          kubectl wait --for=condition=available --timeout=120s \
+            deployment/aws-load-balancer-controller \
+            -n kube-system || true
+          sleep 10
 
       # ── Create/update K8s Secret containing the Secrets Manager ARN ──────
       # The actual DB password is NOT stored here — only the ARN is.
