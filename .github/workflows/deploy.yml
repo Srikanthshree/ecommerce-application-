@@ -208,6 +208,22 @@ jobs:
             --region "${{ env.AWS_REGION }}" \
             --name   "${{ env.EKS_CLUSTER_NAME }}"
 
+      # ── Install AWS Load Balancer Controller for ALB Ingress ──────────────
+      - name: "Install AWS Load Balancer Controller"
+        run: |
+          # Add Helm repo
+          helm repo add eks https://aws.github.io/eks-charts || true
+          helm repo update
+
+          # Install ALB controller in kube-system namespace
+          helm upgrade --install aws-load-balancer-controller \
+            eks/aws-load-balancer-controller \
+            --namespace kube-system \
+            --set clusterName="${{ env.EKS_CLUSTER_NAME }}" \
+            --set serviceAccount.create=true \
+            --set serviceAccount.name=aws-load-balancer-controller \
+            --wait
+
       # ── Create/update K8s Secret containing the Secrets Manager ARN ──────
       # The actual DB password is NOT stored here — only the ARN is.
       # The Node.js process calls Secrets Manager at startup to fetch creds.
