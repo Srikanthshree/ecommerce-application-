@@ -40,8 +40,10 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY --chown=appuser:appgroup src/ ./src/
 
-# Restrict permissions
-RUN chmod -R 550 /app
+# Give appuser ownership of /app so multiprocessing workers can chdir into it,
+# then restrict write access on all files.
+RUN chown appuser:appgroup /app \
+ && chmod -R 550 /app
 
 USER appuser
 

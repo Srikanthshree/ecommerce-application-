@@ -32,8 +32,17 @@ spec:
   rules:
     - http:
         paths:
-          # Catalog API — Python FastAPI
-          - path: /api/v1/products
+          # Health — catalog returns version + DB status (React app reads this)
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: catalog
+                port:
+                  number: 8000
+
+          # All REST API calls — Python FastAPI catalog
+          - path: /api
             pathType: Prefix
             backend:
               service:
@@ -41,16 +50,16 @@ spec:
                 port:
                   number: 8000
 
-          # Backend API — Node.js
-          - path: /api
+          # FastAPI Swagger UI (useful for testing)
+          - path: /docs
             pathType: Prefix
             backend:
               service:
-                name: backend
+                name: catalog
                 port:
-                  number: 8080
+                  number: 8000
 
-          # Frontend — React SPA (catch-all)
+          # Frontend — React SPA (catch-all must be last)
           - path: /
             pathType: Prefix
             backend:

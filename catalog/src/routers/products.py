@@ -3,9 +3,9 @@
 # Full CRUD REST API for products.
 # =============================================================================
 from decimal import Decimal
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, condecimal
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +15,16 @@ from src.models.product import Product
 router = APIRouter(prefix="/products", tags=["products"])
 
 
+# Pydantic v2: decimal_places is not a Field() constraint; DB enforces NUMERIC(10,2)
+PositiveDecimal = Annotated[Decimal, Field(gt=0)]
+
+
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 class ProductCreate(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    price: Decimal = Field(..., gt=0, decimal_places=2)
+    price: PositiveDecimal
     stock_quantity: int = Field(default=0, ge=0)
     category: Optional[str] = Field(None, max_length=100)
     image_url: Optional[str] = Field(None, max_length=512)
@@ -30,7 +34,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = None
-    price: Optional[Decimal] = Field(None, gt=0, decimal_places=2)
+    price: Optional[PositiveDecimal] = None
     stock_quantity: Optional[int] = Field(None, ge=0)
     category: Optional[str] = Field(None, max_length=100)
     image_url: Optional[str] = Field(None, max_length=512)

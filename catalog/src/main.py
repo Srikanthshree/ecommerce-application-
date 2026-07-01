@@ -87,7 +87,9 @@ app.include_router(products_router, prefix="/api/v1")
 
 @app.get("/health", tags=["health"])
 async def health():
-    return {"status": "ok", "service": "catalog"}
+    from src.database import engine
+    db_status = "healthy" if engine is not None else "unavailable"
+    return {"status": "ok", "version": "1.0.0", "checks": {"database": db_status}}
 
 
 @app.get("/ready", tags=["health"])

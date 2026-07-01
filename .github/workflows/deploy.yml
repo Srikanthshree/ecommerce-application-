@@ -102,54 +102,76 @@ jobs:
         id: tag
         run: echo "TAG=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
-      # ── Backend: self-contained multi-stage Docker build ─────────────────
-      # tsc runs inside the builder stage. If tsc fails, docker build fails
-      # immediately with a clear error — no silent partial dist/ possible.
-      - name: "Build backend image"
+      # ── Frontend (React + nginx) ──────────────────────────────────────────
+      - name: "Build frontend image"
         env:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
         run: |
-          set -euo pipefail
-          mkdir -p logs
           docker build \
-            --progress=plain \
             --no-cache \
-            --tag "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}" \
-            ./backend 2>&1 | tee logs/docker-backend-build.log
+            --build-arg REACT_APP_API_URL="${{ vars.API_URL || '' }}" \
+            --tag "${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}" \
+            ./frontend
 
-      - name: "Upload docker backend build log"
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-backend-build-log
-          path: logs/docker-backend-build.log
-
-      - name: "Trivy — scan backend image"
+      - name: "Trivy — scan frontend image"
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/backend:${{ steps.tag.outputs.TAG }}"
+          image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/frontend:${{ steps.tag.outputs.TAG }}"
           format:    "sarif"
-          output:    "trivy-backend-image.sarif"
+          output:    "trivy-frontend-image.sarif"
           severity:  "CRITICAL,HIGH"
           exit-code: "0"
           limit-severities-for-sarif: "true"
 
-      - name: "Upload backend image scan → GitHub Security"
+      - name: "Upload frontend image scan → GitHub Security"
         if: success()
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: "trivy-backend-image.sarif"
-          category:   "trivy-backend-image"
+          sarif_file: "trivy-frontend-image.sarif"
+          category:   "trivy-frontend-image"
 
-      - name: "Push backend image to ECR"
+      - name: "Push frontend image to ECR"
         env:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
-        run: docker push "${REGISTRY}/ecommerce/backend:${IMAGE_TAG}"
+        run: docker push "${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}"
 
-      # ── Frontend ─────────────────────────────────────────────────────────
-      - name: "Build frontend image"
+      # ── Catalog (Python / FastAPI) — this IS the backend API ─────────────
+      - name: "Build catalog image"
+        env:
+          REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
+        run: |
+          docker build \
+            --no-cache \
+            --tag "${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}" \
+            ./catalog
+
+      - name: "Trivy — scan catalog image"
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: "${{ steps.ecr-login.outputs.registry }}/ecommerce/catalog:${{ steps.tag.outputs.TAG }}"
+          format:    "sarif"
+          output:    "trivy-catalog-image.sarif"
+          severity:  "CRITICAL,HIGH"
+          exit-code: "0"
+          limit-severities-for-sarif: "true"
+
+      - name: "Upload catalog image scan → GitHub Security"
+        if: success()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: "trivy-catalog-image.sarif"
+          category:   "trivy-catalog-image"
+
+      - name: "Push catalog image to ECR"
+        env:
+          REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
+        run: docker push "${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}"
+
+# =============================================================================
         env:
           REGISTRY:  ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ steps.tag.outputs.TAG }}
@@ -275,14 +297,10 @@ jobs:
           IMAGE_TAG:     ${{ needs.build-and-scan.outputs.image_tag }}
           IRSA_ROLE_ARN: ${{ secrets.IRSA_ROLE_ARN }}
         run: |
-          # Apply namespace + RBAC first
+          # Apply namespace first
           kubectl apply -f k8s/namespace.yaml
 
-          # Substitute image placeholders
-          sed -i \
-            "s|ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/backend:IMAGE_TAG|${REGISTRY}/ecommerce/backend:${IMAGE_TAG}|g" \
-            k8s/backend-deployment.yaml
-
+          # Substitute image placeholders (catalog + frontend only)
           sed -i \
             "s|ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/frontend:IMAGE_TAG|${REGISTRY}/ecommerce/frontend:${IMAGE_TAG}|g" \
             k8s/frontend-deployment.yaml
@@ -291,57 +309,29 @@ jobs:
             "s|ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ecommerce/catalog:IMAGE_TAG|${REGISTRY}/ecommerce/catalog:${IMAGE_TAG}|g" \
             k8s/catalog-deployment.yaml
 
-          # Substitute IRSA role ARN in ServiceAccount annotations
-          sed -i "s|IRSA_ROLE_ARN|${IRSA_ROLE_ARN}|g" k8s/backend-service.yaml
+          # Substitute IRSA role ARN in catalog ServiceAccount
           sed -i "s|IRSA_ROLE_ARN|${IRSA_ROLE_ARN}|g" k8s/catalog-deployment.yaml
 
-          # Apply all manifests
-          # Apply ServiceAccount + ConfigMap first to avoid race where the
-          # Deployment is created before the ServiceAccount exists.
-          kubectl apply -f k8s/backend-service.yaml || true
+          # Apply catalog first (ServiceAccount + ConfigMap + Service + Deployment)
+          kubectl apply -f k8s/catalog-deployment.yaml
 
-          # Wait briefly for the ServiceAccount to be visible to the API server
-          for i in $(seq 1 30); do
-            if kubectl get sa backend -n ecommerce >/dev/null 2>&1; then
-              echo "ServiceAccount 'backend' exists." && break
-            fi
-            echo "Waiting for ServiceAccount 'backend'... ($i)";
-            sleep 1
+          # Wait for catalog ServiceAccount before applying frontend
+          for i in $(seq 1 20); do
+            kubectl get sa catalog -n ecommerce >/dev/null 2>&1 && break
+            echo "Waiting for catalog ServiceAccount... ($i)"; sleep 2
           done
 
-          # Apply remaining manifests
-          kubectl apply -f k8s/
+          # Apply frontend
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/frontend-service.yaml
+          kubectl apply -f k8s/ingress.yaml
 
       # ── Wait for rollout to complete ──────────────────────────────────────
-      - name: "Wait for backend rollout"
+      - name: "Wait for catalog rollout"
         run: |
-          kubectl rollout status deployment/backend  \
+          kubectl rollout status deployment/catalog \
             --namespace ecommerce \
-            --timeout   180s
-
-      - name: "Debug backend pods on failure"
-        if: failure()
-        run: |
-          echo "=== Debug: get pods ==="
-          kubectl get pods -n ecommerce -o wide || true
-
-          echo "=== Debug: describe backend deployment ==="
-          kubectl describe deployment backend -n ecommerce || true
-
-          echo "=== Debug: describe backend pods ==="
-          for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
-            kubectl describe "$p" -n ecommerce || true
-          done
-          echo "=== Debug: backend secret (db_secret_arn) ==="
-          kubectl get secret backend-secrets -n ecommerce -o jsonpath='{.data.db_secret_arn}' | base64 --decode || true
-
-          echo "=== Debug: recent logs (last 200 lines) from backend pods ==="
-          for p in $(kubectl get pods -n ecommerce -l app=backend -o name); do
-            kubectl logs "$p" -n ecommerce --all-containers --tail=200 || true
-          done
-
-          echo "=== Debug: events ==="
-          kubectl get events -n ecommerce --sort-by='.metadata.creationTimestamp' || true
+            --timeout   300s
 
       - name: "Wait for frontend rollout"
         run: |
@@ -349,18 +339,14 @@ jobs:
             --namespace ecommerce \
             --timeout   180s
 
-      - name: "Wait for catalog rollout"
-        run: |
-          kubectl rollout status deployment/catalog \
-            --namespace ecommerce \
-            --timeout   180s
-
       # ── Post-deploy verification ──────────────────────────────────────────
-      - name: "Verify running pods"
+      - name: "Verify running pods and ingress"
         run: |
-          echo "=== Backend pods ==="
-          kubectl get pods -n ecommerce -l app=backend  -o wide
-          echo "=== Frontend pods ==="
-          kubectl get pods -n ecommerce -l app=frontend -o wide
           echo "=== Catalog pods ==="
           kubectl get pods -n ecommerce -l app=catalog  -o wide
+          echo "=== Frontend pods ==="
+          kubectl get pods -n ecommerce -l app=frontend -o wide
+          echo "=== Ingress ==="
+          kubectl get ingress -n ecommerce -o wide
+          echo "=== Services ==="
+          kubectl get svc -n ecommerce

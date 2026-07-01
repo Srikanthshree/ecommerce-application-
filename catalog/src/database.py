@@ -5,7 +5,7 @@
 # =============================================================================
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
-from src.config import fetch_db_credentials
+from src.config import fetch_db_credentials, settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ async def init_db() -> None:
         f"@{creds['host']}:{creds['port']}/{creds['dbname']}"
     )
 
+    connect_args = {"ssl": "require"} if settings.db_ssl else {}
+
     engine = create_async_engine(
         dsn,
         pool_size=10,
@@ -35,7 +37,7 @@ async def init_db() -> None:
         pool_timeout=30,
         pool_recycle=1800,
         echo=False,
-        connect_args={"ssl": "require"},   # enforce TLS to RDS
+        connect_args=connect_args,
     )
 
     AsyncSessionLocal = sessionmaker(

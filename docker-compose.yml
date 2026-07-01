@@ -1,0 +1,91 @@
+# =============================================================================
+# docker-compose.yml — Local development stack
+#
+# Services:
+#   postgres  — PostgreSQL 16 (local DB, no AWS RDS needed)
+#   catalog   — Python/FastAPI product catalog API  (port 8000)
+#   frontend  — React SPA served by nginx           (port 8080)
+#
+# Usage:
+#   docker compose up --build          # first run
+#   docker compose up                  # subsequent runs
+#   docker compose down -v             # stop and remove volumes
+#
+# Access:
+#   Frontend  →  http://localhost:8080
+#   API docs  →  http://localhost:8080/docs
+#   API root  →  http://localhost:8000  (direct, skips nginx)
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ecommerce-postgres
+    environment:
+      POSTGRES_DB:       ecommerce
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U postgres -d ecommerce"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+
+  # ── Catalog API (Python / FastAPI) ─────────────────────────────────────────
+  catalog:
+    build:
+      context: ./catalog
+      target:  production
+    container_name: ecommerce-catalog
+    environment:
+      # Local DB — no AWS Secrets Manager needed
+      DB_SECRET_ARN: ""
+      DB_HOST:       postgres
+      DB_PORT:       "5432"
+      DB_NAME:       ecommerce
+      DB_USER:       postgres
+      DB_PASSWORD:   postgres
+      DB_SSL:        "false"
+      # Allow requests from the frontend container
+      ALLOWED_ORIGINS: "http://localhost:8080"
+      LOG_LEVEL:       info
+    ports:
+      - "8000:8000"
+    # 1 worker locally — avoids multiprocessing.spawn chdir issues
+    command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # python is available; wget/curl are not in slim image
+      test:         ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval:     10s
+      timeout:      5s
+      retries:      6
+      start_period: 20s
+
+  # ── Frontend (React + nginx) ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Empty = same-origin; nginx proxies /health and /api/ to catalog
+        REACT_APP_API_URL: ""
+    container_name: ecommerce-frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      catalog:
+        condition: service_healthy
+    volumes:
+      # Mount local nginx config that adds proxy rules for catalog
+      - ./frontend/nginx.local.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  postgres_data:

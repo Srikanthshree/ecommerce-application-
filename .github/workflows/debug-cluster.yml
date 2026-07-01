@@ -12,11 +12,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Configure AWS credentials (assume role)
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ARN }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region:     ${{ secrets.AWS_REGION }}
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
@@ -42,23 +42,16 @@ jobs:
           # 172.20.0.10 = kube-dns ClusterIP = CoreDNS itself → causes loop crash
           # 10.0.0.2 = VPC base CIDR +2 = Amazon VPC DNS resolver → correct upstream
           # Also removing 'loop' plugin to prevent false loop detection during restart
-          kubectl -n kube-system create configmap coredns --dry-run=client -o yaml \
-            --from-literal=Corefile='.:53 {
-    errors
-    health {
-        lameduck 5s
-    }
-    ready
-    kubernetes cluster.local in-addr.arpa ip6.arpa {
-      pods insecure
-      fallthrough in-addr.arpa ip6.arpa
-    }
-    prometheus :9153
-    forward . 10.0.0.2
-    cache 30
-    reload
-    loadbalance
-}' | kubectl apply -f -
+          # Write Corefile to /tmp first — avoids YAML indentation conflict
+          # (Corefile content has 4-space indent; YAML block needs 10-space min)
+          COREFILE='.:53 {\n    errors\n    health {\n        lameduck 5s\n    }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n      pods insecure\n      fallthrough in-addr.arpa ip6.arpa\n    }\n    prometheus :9153\n    forward . 10.0.0.2\n    cache 30\n    reload\n    loadbalance\n}'
+          printf '%b\n' "$COREFILE" > /tmp/Corefile
+
+          echo ""
+          echo "=== Applying new CoreDNS config (VPC DNS 10.0.0.2, removed loop plugin) ==="
+          kubectl -n kube-system create configmap coredns \
+            --from-file=Corefile=/tmp/Corefile \
+            --dry-run=client -o yaml | kubectl apply -f -
           
           echo ""
           echo "=== Verified new CoreDNS config ==="
